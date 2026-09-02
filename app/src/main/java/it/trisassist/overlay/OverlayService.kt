@@ -1,44 +1,42 @@
 package it.trisassist.overlay
 
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
-import android.graphics.Color
+import android.content.IntentFilter
 import android.graphics.PixelFormat
-import android.graphics.drawable.GradientDrawable
+import android.graphics.RectF
+import android.os.Build
 import android.os.IBinder
 import android.view.Gravity
 import android.view.WindowManager
-import android.widget.LinearLayout
-import android.widget.TextView
+import androidx.core.content.ContextCompat
 
 class OverlayService : Service() {
     private lateinit var windowManager: WindowManager
-    private var overlay: LinearLayout? = null
+    private var overlay: SuggestionOverlayView? = null
+
+    private val receiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != ACTION_SUGGESTION) return
+            val rects = if (Build.VERSION.SDK_INT >= 33) {
+                intent.getParcelableArrayListExtra(EXTRA_RECTS, RectF::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableArrayListExtra(EXTRA_RECTS)
+            } ?: arrayListOf()
+            overlay?.update(rects, intent.getStringExtra(EXTRA_MESSAGE) ?: "Analisi tessere…")
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WindowManager::class.java)
-        overlay = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(28, 18, 28, 18)
-            background = GradientDrawable().apply {
-                setColor(0xCC183317.toInt())
-                cornerRadius = 24f
-            }
-            addView(TextView(context).apply {
-                text = "TRIS ASSIST ATTIVO"
-                setTextColor(Color.rgb(32, 216, 58))
-                textSize = 15f
-            })
-            addView(TextView(context).apply {
-                text = "Analisi tessere…"
-                setTextColor(Color.WHITE)
-                textSize = 14f
-            })
-        }
+        overlay = SuggestionOverlayView(this)
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
@@ -46,17 +44,30 @@ class OverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 35
-            y = 250
+            x = 0
+            y = 0
         }
         windowManager.addView(overlay, params)
+        ContextCompat.registerReceiver(
+            this,
+            receiver,
+            IntentFilter(ACTION_SUGGESTION),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
     }
 
     override fun onDestroy() {
+        runCatching { unregisterReceiver(receiver) }
         overlay?.let { windowManager.removeView(it) }
         overlay = null
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    companion object {
+        const val ACTION_SUGGESTION = "it.trisassist.SUGGESTION"
+        const val EXTRA_RECTS = "rects"
+        const val EXTRA_MESSAGE = "message"
+    }
 }
