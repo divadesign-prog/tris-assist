@@ -8,7 +8,7 @@ class MovePlanner {
         val visible = state.tiles.filter { it.selectable && it.confidence >= 0.30f }
         val candidates = visible.groupBy { it.kind }.mapNotNull { (kind, tiles) ->
             val needed = (3 - (trayCounts[kind] ?: 0)).coerceIn(1, 3)
-            if (tiles.size >= needed) {
+            if (tiles.size >= needed && needed <= freeSlots) {
                 val orderBonus = if (kind == state.order) 100 else 0
                 val completionBonus = (3 - needed) * 25
                 Triple(orderBonus + completionBonus, kind, tiles.take(needed))
