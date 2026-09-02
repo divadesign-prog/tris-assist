@@ -2,9 +2,24 @@ package it.trisassist.vision
 
 import android.graphics.RectF
 
-enum class ItemKind {
-    HAT, SOCK, GLOVE, CUTLERY, SPROUT, CHEESE, CAKE, WOOL,
-    YARN, MEAT, CARROT, CORN, PEA, SKEWER, MILK, GEM, UNKNOWN
+enum class ItemKind(val label: String) {
+    GEM("Diamanti"),
+    SPROUT("Erba"),
+    SOCK("Calze"),
+    GLOVE("Guanti"),
+    HAT("Cappello"),
+    CORN("Mais"),
+    PEA("Piselli"),
+    CARROT("Carote"),
+    WOOL("Nuvola"),
+    SKEWER("Spiedo"),
+    YARN("Gomitolo"),
+    CHEESE("Formaggio"),
+    CUTLERY("Posate"),
+    MEAT("Carne"),
+    CAKE("Torta"),
+    MILK("Latte"),
+    UNKNOWN("Oggetto")
 }
 
 enum class GamePhase { INITIAL_REVEAL, PLAYING, OBSERVING, FINISHED }
