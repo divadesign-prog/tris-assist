@@ -5,7 +5,7 @@ class MovePlanner {
         if (state.observingOtherPlayer || state.phase != GamePhase.PLAYING) return null
         val freeSlots = 7 - state.tray.size
         val trayCounts = state.tray.groupingBy { it }.eachCount()
-        val visible = state.tiles.filter { it.selectable && it.confidence >= 0.72f }
+        val visible = state.tiles.filter { it.selectable && it.confidence >= 0.18f }
         val candidates = visible.groupBy { it.kind }.mapNotNull { (kind, tiles) ->
             val needed = (3 - (trayCounts[kind] ?: 0)).coerceIn(1, 3)
             if (tiles.size >= needed) {
