@@ -66,6 +66,7 @@ class TileRecognizer {
 
         var bestKind = ItemKind.UNKNOWN
         var bestDistance = Float.MAX_VALUE
+        var secondBestDistance = Float.MAX_VALUE
         templates.forEach { (kind, template) ->
             var sum = 0f
             for (i in sig.indices) {
@@ -74,8 +75,11 @@ class TileRecognizer {
             }
             val distance = sqrt(sum / sig.size)
             if (distance < bestDistance) {
+                secondBestDistance = bestDistance
                 bestDistance = distance
                 bestKind = kind
+            } else if (distance < secondBestDistance) {
+                secondBestDistance = distance
             }
         }
         if (bestDistance > maxDistance || secondBestDistance - bestDistance < 0.10f) return null
