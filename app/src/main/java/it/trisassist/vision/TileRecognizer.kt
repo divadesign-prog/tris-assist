@@ -27,7 +27,7 @@ class TileRecognizer {
             val centerY = bounds.centerY() / source.height
             val region = when {
                 centerY in 0.18f..0.72f -> 0
-                centerY in 0.73f..0.88f -> 1
+                centerY in 0.755f..0.835f -> 1
                 else -> -1
             }
             if (region < 0) null else Feature(bounds, signature(source, bounds), region)
