@@ -26,10 +26,17 @@ class SuggestionOverlayView(context: Context) : View(context) {
         invalidate()
     }
 
+    private fun statusBarHeight(): Float {
+        val id = resources.getIdentifier("status_bar_height", "dimen", "android")
+        return if (id > 0) resources.getDimensionPixelSize(id).toFloat()
+        else 24f * resources.displayMetrics.density
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val statusBarOffset = if (Build.VERSION.SDK_INT >= 30) {
-            rootWindowInsets?.getInsets(WindowInsets.Type.statusBars())?.top?.toFloat() ?: 0f
+            rootWindowInsets?.getInsets(WindowInsets.Type.statusBars())?.top?.toFloat()
+                ?.takeIf { it > 0f } ?: statusBarHeight()
         } else {
             0f
         }
