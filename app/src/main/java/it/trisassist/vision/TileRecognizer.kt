@@ -42,7 +42,7 @@ class TileRecognizer {
             (orderCx + orderSide / 2).toFloat(),
             (orderCy + orderSide / 2).toFloat()
         )
-        val order = classify(source, orderRect, 1.05f)?.first
+        val order = classify(source, orderRect, 1.30f)?.first
 
         return RecognizedFrame(
             boardTiles = deduplicate(board),
@@ -54,7 +54,7 @@ class TileRecognizer {
     private fun classify(
         source: Bitmap,
         bounds: RectF,
-        maxDistance: Float = 0.92f
+        maxDistance: Float = 1.25f
     ): Pair<ItemKind, Float>? {
         val left = bounds.left.toInt().coerceIn(0, source.width - 1)
         val top = bounds.top.toInt().coerceIn(0, source.height - 1)
@@ -82,7 +82,7 @@ class TileRecognizer {
                 secondBestDistance = distance
             }
         }
-        if (bestDistance > maxDistance || secondBestDistance - bestDistance < 0.10f) return null
+        if (bestDistance > maxDistance || secondBestDistance - bestDistance < 0.04f) return null
         return bestKind to (1f - bestDistance / maxDistance).coerceIn(0f, 1f)
     }
 
