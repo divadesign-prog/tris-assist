@@ -12,108 +12,103 @@ data class RecognizedFrame(
 )
 
 class TileRecognizer {
-    private val templates = TemplateData.load().mapValues { signature(it.value) }
+    private data class Feature(val bounds: RectF, val signature: FloatArray, val region: Int)
+    private data class Cluster(val kind: ItemKind, val centroid: FloatArray, var count: Int)
 
     fun recognize(source: Bitmap): RecognizedFrame {
-        val candidates = findBrightTiles(source)
-        val board = mutableListOf<TileDetection>()
-        val tray = mutableListOf<ItemKind>()
-
-        for (bounds in candidates) {
-            val result = classify(source, bounds) ?: continue
+        val features = findBrightTiles(source).mapNotNull { bounds ->
             val centerY = bounds.centerY() / source.height
-            when {
-                centerY in 0.18f..0.72f -> board += TileDetection(
-                    kind = result.first,
-                    bounds = bounds,
-                    selectable = true,
-                    confidence = result.second
-                )
-                centerY in 0.73f..0.88f -> tray += result.first
+            val region = when {
+                centerY in 0.18f..0.72f -> 0
+                centerY in 0.73f..0.88f -> 1
+                else -> -1
             }
+            if (region < 0) null else Feature(bounds, signature(source, bounds), region)
         }
 
-        val orderSide = (source.width * 0.09f).toInt().coerceAtLeast(64)
-        val orderCx = (source.width * 0.835f).toInt()
-        val orderCy = (source.height * 0.13f).toInt()
-        val orderRect = RectF(
-            (orderCx - orderSide / 2).toFloat(),
-            (orderCy - orderSide / 2).toFloat(),
-            (orderCx + orderSide / 2).toFloat(),
-            (orderCy + orderSide / 2).toFloat()
-        )
-        val order = classify(source, orderRect, 1.30f)?.first
+        val clusters = mutableListOf<Cluster>()
+        val kinds = ItemKind.values().filter { it != ItemKind.UNKNOWN }
+        val assignments = mutableListOf<Pair<Feature, Pair<ItemKind, Float>>>()
+
+        features.forEach { feature ->
+            val nearest = clusters.minByOrNull { distance(feature.signature, it.centroid) }
+            val nearestDistance = nearest?.let { distance(feature.signature, it.centroid) } ?: Float.MAX_VALUE
+            val cluster = if (nearest != null && (nearestDistance <= 0.46f || clusters.size >= kinds.size)) {
+                update(nearest, feature.signature)
+                nearest
+            } else {
+                Cluster(kinds[clusters.size], feature.signature.copyOf(), 1).also { clusters += it }
+            }
+            val confidence = if (nearest == null || cluster.count == 1) 1f
+                else (1f - nearestDistance / 0.62f).coerceIn(0f, 1f)
+            assignments += feature to (cluster.kind to confidence)
+        }
+
+        val board = assignments.filter { it.first.region == 0 }.map { (feature, result) ->
+            TileDetection(
+                kind = result.first,
+                bounds = feature.bounds,
+                selectable = true,
+                confidence = result.second
+            )
+        }
+        val tray = assignments.filter { it.first.region == 1 }.map { it.second.first }
 
         return RecognizedFrame(
             boardTiles = deduplicate(board),
             tray = tray,
-            order = order
+            order = null
         )
     }
 
-    private fun classify(
-        source: Bitmap,
-        bounds: RectF,
-        maxDistance: Float = 1.25f
-    ): Pair<ItemKind, Float>? {
-        val left = bounds.left.toInt().coerceIn(0, source.width - 1)
-        val top = bounds.top.toInt().coerceIn(0, source.height - 1)
-        val right = bounds.right.toInt().coerceIn(left + 1, source.width)
-        val bottom = bounds.bottom.toInt().coerceIn(top + 1, source.height)
-        val crop = Bitmap.createBitmap(source, left, top, right - left, bottom - top)
-        val sig = signature(crop)
-        if (crop !== source) crop.recycle()
-
-        var bestKind = ItemKind.UNKNOWN
-        var bestDistance = Float.MAX_VALUE
-        var secondBestDistance = Float.MAX_VALUE
-        templates.forEach { (kind, template) ->
-            var sum = 0f
-            for (i in sig.indices) {
-                val delta = sig[i] - template[i]
-                sum += delta * delta
-            }
-            val distance = sqrt(sum / sig.size)
-            if (distance < bestDistance) {
-                secondBestDistance = bestDistance
-                bestDistance = distance
-                bestKind = kind
-            } else if (distance < secondBestDistance) {
-                secondBestDistance = distance
-            }
+    private fun update(cluster: Cluster, sample: FloatArray) {
+        val oldCount = cluster.count.toFloat()
+        for (i in cluster.centroid.indices) {
+            cluster.centroid[i] = (cluster.centroid[i] * oldCount + sample[i]) / (oldCount + 1f)
         }
-        if (bestDistance > maxDistance || secondBestDistance - bestDistance < 0.04f) return null
-        return bestKind to (1f - bestDistance / maxDistance).coerceIn(0f, 1f)
+        cluster.count++
     }
 
-    private fun signature(bitmap: Bitmap): FloatArray {
-        val scaled = Bitmap.createScaledBitmap(bitmap, 16, 16, true)
-        val pixels = IntArray(256)
-        scaled.getPixels(pixels, 0, 16, 0, 0, 16, 16)
-        if (scaled !== bitmap) scaled.recycle()
+    private fun distance(a: FloatArray, b: FloatArray): Float {
+        var sum = 0f
+        for (i in a.indices) {
+            val delta = a[i] - b[i]
+            sum += delta * delta
+        }
+        return sqrt(sum / a.size)
+    }
 
-        val values = FloatArray(256 * 3)
+    private fun signature(source: Bitmap, bounds: RectF): FloatArray {
+        val insetX = bounds.width() * 0.08f
+        val insetY = bounds.height() * 0.08f
+        val left = (bounds.left + insetX).toInt().coerceIn(0, source.width - 1)
+        val top = (bounds.top + insetY).toInt().coerceIn(0, source.height - 1)
+        val right = (bounds.right - insetX).toInt().coerceIn(left + 1, source.width)
+        val bottom = (bounds.bottom - insetY).toInt().coerceIn(top + 1, source.height)
+        val crop = Bitmap.createBitmap(source, left, top, right - left, bottom - top)
+        val scaled = Bitmap.createScaledBitmap(crop, 20, 20, true)
+        crop.recycle()
+        val pixels = IntArray(400)
+        scaled.getPixels(pixels, 0, 20, 0, 0, 20, 20)
+        scaled.recycle()
+
+        val values = FloatArray(400 * 3)
         val means = FloatArray(3)
         pixels.forEachIndexed { index, color ->
-            val r = ((color shr 16) and 255).toFloat()
-            val g = ((color shr 8) and 255).toFloat()
-            val b = (color and 255).toFloat()
-            values[index * 3] = r
-            values[index * 3 + 1] = g
-            values[index * 3 + 2] = b
-            means[0] += r
-            means[1] += g
-            means[2] += b
+            val channels = intArrayOf((color shr 16) and 255, (color shr 8) and 255, color and 255)
+            for (c in 0..2) {
+                values[index * 3 + c] = channels[c].toFloat()
+                means[c] += channels[c]
+            }
         }
-        for (c in 0..2) means[c] /= 256f
-
+        for (c in 0..2) means[c] /= 400f
         val deviations = FloatArray(3)
-        for (i in 0 until 256) for (c in 0..2) {
+        for (i in 0 until 400) for (c in 0..2) {
             val d = values[i * 3 + c] - means[c]
             deviations[c] += d * d
         }
-        for (c in 0..2) deviations[c] = max(12f, sqrt(deviations[c] / 256f))
-        for (i in 0 until 256) for (c in 0..2) {
+        for (c in 0..2) deviations[c] = max(12f, sqrt(deviations[c] / 400f))
+        for (i in 0 until 400) for (c in 0..2) {
             values[i * 3 + c] = (values[i * 3 + c] - means[c]) / deviations[c]
         }
         return values
