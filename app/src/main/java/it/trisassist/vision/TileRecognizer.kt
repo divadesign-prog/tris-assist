@@ -13,10 +13,17 @@ data class RecognizedFrame(
 
 class TileRecognizer {
     private data class Feature(val bounds: RectF, val signature: FloatArray, val region: Int)
-    private data class Cluster(val kind: ItemKind, val centroid: FloatArray, var count: Int)
+    private data class Triplet(val indices: IntArray, val trayCount: Int, val score: Float)
 
     fun recognize(source: Bitmap): RecognizedFrame {
-        val features = findBrightTiles(source).mapNotNull { bounds ->
+        val uniqueBounds = mutableListOf<RectF>()
+        findBrightTiles(source)
+            .sortedByDescending { it.width() * it.height() }
+            .forEach { bounds ->
+                if (uniqueBounds.none { overlap(it, bounds) > 0.55f }) uniqueBounds += bounds
+            }
+
+        val features = uniqueBounds.mapNotNull { bounds ->
             val centerY = bounds.centerY() / source.height
             val region = when {
                 centerY in 0.18f..0.72f -> 0
@@ -26,47 +33,59 @@ class TileRecognizer {
             if (region < 0) null else Feature(bounds, signature(source, bounds), region)
         }
 
-        val clusters = mutableListOf<Cluster>()
-        val kinds = ItemKind.values().filter { it != ItemKind.UNKNOWN }
-        val assignments = mutableListOf<Pair<Feature, Pair<ItemKind, Float>>>()
-
-        features.forEach { feature ->
-            val nearest = clusters.minByOrNull { distance(feature.signature, it.centroid) }
-            val nearestDistance = nearest?.let { distance(feature.signature, it.centroid) } ?: Float.MAX_VALUE
-            val cluster = if (nearest != null && (nearestDistance <= 0.46f || clusters.size >= kinds.size)) {
-                update(nearest, feature.signature)
-                nearest
-            } else {
-                Cluster(kinds[clusters.size], feature.signature.copyOf(), 1).also { clusters += it }
-            }
-            val confidence = if (nearest == null || cluster.count == 1) 1f
-                else (1f - nearestDistance / 0.62f).coerceIn(0f, 1f)
-            assignments += feature to (cluster.kind to confidence)
-        }
-
-        val board = assignments.filter { it.first.region == 0 }.map { (feature, result) ->
-            TileDetection(
-                kind = result.first,
+        val triplet = findBestTriplet(features)
+        val chosen = triplet?.indices?.toSet().orEmpty()
+        val board = features.mapIndexedNotNull { index, feature ->
+            if (feature.region != 0 || index !in chosen) null else TileDetection(
+                kind = ItemKind.GEM,
                 bounds = feature.bounds,
                 selectable = true,
-                confidence = result.second
+                confidence = 1f
             )
         }
-        val tray = assignments.filter { it.first.region == 1 }.map { it.second.first }
 
-        return RecognizedFrame(
-            boardTiles = deduplicate(board),
-            tray = tray,
-            order = null
-        )
+        var fillerIndex = 1
+        val fillers = ItemKind.values().filter { it != ItemKind.UNKNOWN && it != ItemKind.GEM }
+        val tray = features.mapIndexedNotNull { index, feature ->
+            if (feature.region != 1) null
+            else if (index in chosen) ItemKind.GEM
+            else fillers[(fillerIndex++ - 1) % fillers.size]
+        }
+
+        return RecognizedFrame(boardTiles = board, tray = tray, order = null)
     }
 
-    private fun update(cluster: Cluster, sample: FloatArray) {
-        val oldCount = cluster.count.toFloat()
-        for (i in cluster.centroid.indices) {
-            cluster.centroid[i] = (cluster.centroid[i] * oldCount + sample[i]) / (oldCount + 1f)
+    private fun findBestTriplet(features: List<Feature>): Triplet? {
+        if (features.size < 3) return null
+        val distances = Array(features.size) { FloatArray(features.size) }
+        for (i in features.indices) for (j in i + 1 until features.size) {
+            val value = distance(features[i].signature, features[j].signature)
+            distances[i][j] = value
+            distances[j][i] = value
         }
-        cluster.count++
+
+        var best: Triplet? = null
+        for (a in 0 until features.size - 2) {
+            for (b in a + 1 until features.size - 1) {
+                for (c in b + 1 until features.size) {
+                    val boardCount = listOf(a, b, c).count { features[it].region == 0 }
+                    if (boardCount == 0) continue
+                    val score = maxOf(distances[a][b], distances[a][c], distances[b][c])
+                    if (score > 0.42f) continue
+                    val candidate = Triplet(
+                        indices = intArrayOf(a, b, c),
+                        trayCount = 3 - boardCount,
+                        score = score
+                    )
+                    val current = best
+                    if (current == null ||
+                        candidate.trayCount > current.trayCount ||
+                        (candidate.trayCount == current.trayCount && candidate.score < current.score)
+                    ) best = candidate
+                }
+            }
+        }
+        return best
     }
 
     private fun distance(a: FloatArray, b: FloatArray): Float {
