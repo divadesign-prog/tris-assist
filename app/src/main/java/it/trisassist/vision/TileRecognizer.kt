@@ -71,7 +71,7 @@ class TileRecognizer {
                     val boardCount = listOf(a, b, c).count { features[it].region == 0 }
                     if (boardCount == 0) continue
                     val score = maxOf(distances[a][b], distances[a][c], distances[b][c])
-                    if (score > 0.42f) continue
+                    if (score > 0.50f) continue
                     val candidate = Triplet(
                         indices = intArrayOf(a, b, c),
                         trayCount = 3 - boardCount,
