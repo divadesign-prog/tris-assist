@@ -5,23 +5,18 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.os.Build
 import android.view.View
+import android.view.WindowInsets
 
 class SuggestionOverlayView(context: Context) : View(context) {
-    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(32, 216, 58)
-        style = Paint.Style.STROKE
-        strokeWidth = 9f
-    }
-    private val badge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(32, 216, 58)
+    private val dotBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
         style = Paint.Style.FILL
     }
-    private val badgeText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.BLACK
-        textSize = 34f
-        textAlign = Paint.Align.CENTER
-        isFakeBoldText = true
+    private val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(32, 216, 58)
+        style = Paint.Style.FILL
     }
     private val panel = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xCC183317.toInt()
@@ -53,13 +48,16 @@ class SuggestionOverlayView(context: Context) : View(context) {
         canvas.drawText("TRIS ASSIST ATTIVO", 55f, 292f, title)
         canvas.drawText(message, 55f, 337f, subtitle)
 
-        suggestions.forEachIndexed { index, rect ->
-            val expanded = RectF(rect).apply { inset(-7f, -7f) }
-            canvas.drawRoundRect(expanded, 18f, 18f, ring)
-            val cx = expanded.right - 4f
-            val cy = expanded.top + 4f
-            canvas.drawCircle(cx, cy, 27f, badge)
-            canvas.drawText((index + 1).toString(), cx, cy + 11f, badgeText)
+        val statusBarOffset = if (Build.VERSION.SDK_INT >= 30) {
+            rootWindowInsets?.getInsets(WindowInsets.Type.statusBars())?.top?.toFloat() ?: 0f
+        } else {
+            0f
+        }
+        suggestions.forEach { rect ->
+            val cx = rect.centerX()
+            val cy = rect.centerY() - statusBarOffset
+            canvas.drawCircle(cx, cy, 17f, dotBorder)
+            canvas.drawCircle(cx, cy, 12f, dot)
         }
     }
 }
