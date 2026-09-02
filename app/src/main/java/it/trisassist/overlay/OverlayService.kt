@@ -46,7 +46,8 @@ class OverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 35; y = 360
+            x = 35
+            y = 250
         }
         windowManager.addView(overlay, params)
     }
