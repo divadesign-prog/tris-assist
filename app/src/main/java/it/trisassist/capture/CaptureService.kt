@@ -135,7 +135,7 @@ class CaptureService : Service() {
             frame.boardTiles.isEmpty() -> publish(emptyList(), "Cerco tessere…")
             suggestion == null -> publish(emptyList(), "Nessun tris sicuro")
             else -> {
-                val text = if (suggestion.danger) "Attenzione al vassoio" else "Tris pronto"
+                val text = if (suggestion.danger) "Attenzione: ${suggestion.kind.label}" else "Tris: ${suggestion.kind.label}"
                 publish(suggestion.taps.map { it.bounds }, text)
             }
         }
