@@ -2,6 +2,7 @@ package it.trisassist.vision
 
 import android.graphics.Bitmap
 import android.graphics.RectF
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -13,7 +14,12 @@ data class RecognizedFrame(
 
 class TileRecognizer {
     private data class Feature(val bounds: RectF, val signature: FloatArray, val region: Int)
-    private data class Triplet(val indices: IntArray, val trayCount: Int, val score: Float)
+    private data class Triplet(
+        val indices: IntArray,
+        val trayCount: Int,
+        val unlockScore: Float,
+        val visualScore: Float
+    )
 
     fun recognize(source: Bitmap): RecognizedFrame {
         val uniqueBounds = mutableListOf<RectF>()
@@ -33,7 +39,7 @@ class TileRecognizer {
             if (region < 0) null else Feature(bounds, signature(source, bounds), region)
         }
 
-        val triplet = findBestTriplet(features)
+        val triplet = findBestTriplet(features, source.width.toFloat())
         val chosen = triplet?.indices?.toSet().orEmpty()
         val board = features.mapIndexedNotNull { index, feature ->
             if (feature.region != 0 || index !in chosen) null else TileDetection(
@@ -55,8 +61,13 @@ class TileRecognizer {
         return RecognizedFrame(boardTiles = board, tray = tray, order = null)
     }
 
-    private fun findBestTriplet(features: List<Feature>): Triplet? {
+    private fun findBestTriplet(features: List<Feature>, screenWidth: Float): Triplet? {
         if (features.size < 3) return null
+
+        val traySize = features.count { it.region == 1 }.coerceAtMost(7)
+        val freeSlots = (7 - traySize).coerceAtLeast(0)
+        if (freeSlots == 0) return null
+
         val distances = Array(features.size) { FloatArray(features.size) }
         for (i in features.indices) for (j in i + 1 until features.size) {
             val value = distance(features[i].signature, features[j].signature)
@@ -68,24 +79,65 @@ class TileRecognizer {
         for (a in 0 until features.size - 2) {
             for (b in a + 1 until features.size - 1) {
                 for (c in b + 1 until features.size) {
-                    val boardCount = listOf(a, b, c).count { features[it].region == 0 }
-                    if (boardCount == 0) continue
-                    val score = maxOf(distances[a][b], distances[a][c], distances[b][c])
-                    if (score > 0.50f) continue
+                    val indices = intArrayOf(a, b, c)
+                    val boardCount = indices.count { features[it].region == 0 }
+                    if (boardCount == 0 || boardCount > freeSlots) continue
+
+                    val visualScore = maxOf(distances[a][b], distances[a][c], distances[b][c])
+                    if (visualScore > 0.50f) continue
+
                     val candidate = Triplet(
-                        indices = intArrayOf(a, b, c),
+                        indices = indices,
                         trayCount = 3 - boardCount,
-                        score = score
+                        unlockScore = unlockScore(indices, features, screenWidth),
+                        visualScore = visualScore
                     )
-                    val current = best
-                    if (current == null ||
-                        candidate.trayCount > current.trayCount ||
-                        (candidate.trayCount == current.trayCount && candidate.score < current.score)
-                    ) best = candidate
+                    if (isBetter(candidate, best)) best = candidate
                 }
             }
         }
         return best
+    }
+
+    private fun isBetter(candidate: Triplet, current: Triplet?): Boolean {
+        if (current == null) return true
+
+        // First finish pairs/singles already in the tray: this frees space fastest.
+        if (candidate.trayCount != current.trayCount) {
+            return candidate.trayCount > current.trayCount
+        }
+
+        // With the same tray benefit, prefer exposed tiles in denser/central areas:
+        // removing them is more likely to reveal useful tiles underneath.
+        if (abs(candidate.unlockScore - current.unlockScore) > 0.08f) {
+            return candidate.unlockScore > current.unlockScore
+        }
+
+        // Finally choose the visually safest match.
+        return candidate.visualScore < current.visualScore
+    }
+
+    private fun unlockScore(indices: IntArray, features: List<Feature>, screenWidth: Float): Float {
+        val board = features.filter { it.region == 0 }
+        var total = 0f
+        var count = 0
+
+        for (index in indices) {
+            val selected = features[index]
+            if (selected.region != 0) continue
+            count++
+
+            val tileWidth = selected.bounds.width().coerceAtLeast(screenWidth * 0.05f)
+            val near = board.count { other ->
+                other !== selected &&
+                    abs(other.bounds.centerX() - selected.bounds.centerX()) < tileWidth * 1.65f &&
+                    abs(other.bounds.centerY() - selected.bounds.centerY()) < tileWidth * 1.65f
+            }
+            val centrality = 1f - (abs(selected.bounds.centerX() - screenWidth / 2f) / (screenWidth / 2f))
+                .coerceIn(0f, 1f)
+            total += near.coerceAtMost(8) / 8f + centrality * 0.35f
+        }
+        return if (count == 0) 0f else total / count
     }
 
     private fun distance(a: FloatArray, b: FloatArray): Float {
@@ -115,20 +167,20 @@ class TileRecognizer {
         val means = FloatArray(3)
         pixels.forEachIndexed { index, color ->
             val channels = intArrayOf((color shr 16) and 255, (color shr 8) and 255, color and 255)
-            for (c in 0..2) {
-                values[index * 3 + c] = channels[c].toFloat()
-                means[c] += channels[c]
+            for (channel in 0..2) {
+                values[index * 3 + channel] = channels[channel].toFloat()
+                means[channel] += channels[channel]
             }
         }
-        for (c in 0..2) means[c] /= 400f
+        for (channel in 0..2) means[channel] /= 400f
         val deviations = FloatArray(3)
-        for (i in 0 until 400) for (c in 0..2) {
-            val d = values[i * 3 + c] - means[c]
-            deviations[c] += d * d
+        for (i in 0 until 400) for (channel in 0..2) {
+            val d = values[i * 3 + channel] - means[channel]
+            deviations[channel] += d * d
         }
-        for (c in 0..2) deviations[c] = max(12f, sqrt(deviations[c] / 400f))
-        for (i in 0 until 400) for (c in 0..2) {
-            values[i * 3 + c] = (values[i * 3 + c] - means[c]) / deviations[c]
+        for (channel in 0..2) deviations[channel] = max(12f, sqrt(deviations[channel] / 400f))
+        for (i in 0 until 400) for (channel in 0..2) {
+            values[i * 3 + channel] = (values[i * 3 + channel] - means[channel]) / deviations[channel]
         }
         return values
     }
@@ -183,7 +235,7 @@ class TileRecognizer {
                     if (next !in mask.indices || visited[next] || !mask[next]) continue
                     val nx = next % cols
                     val ny = next / cols
-                    if (kotlin.math.abs(nx - x) + kotlin.math.abs(ny - y) != 1) continue
+                    if (abs(nx - x) + abs(ny - y) != 1) continue
                     visited[next] = true
                     queue[tail++] = next
                 }
@@ -206,15 +258,6 @@ class TileRecognizer {
             }
         }
         return result
-    }
-
-    private fun deduplicate(items: List<TileDetection>): List<TileDetection> {
-        val sorted = items.sortedByDescending { it.confidence }
-        val kept = mutableListOf<TileDetection>()
-        for (item in sorted) {
-            if (kept.none { overlap(it.bounds, item.bounds) > 0.55f }) kept += item
-        }
-        return kept
     }
 
     private fun overlap(a: RectF, b: RectF): Float {
