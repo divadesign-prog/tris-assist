@@ -13,12 +13,18 @@ data class RecognizedFrame(
 )
 
 class TileRecognizer {
-    private data class Feature(val bounds: RectF, val signature: FloatArray, val region: Int)
+    private data class Feature(
+        val bounds: RectF,
+        val signature: FloatArray,
+        val region: Int,
+        val orderDistance: Float
+    )
     private data class Triplet(
         val indices: IntArray,
         val trayCount: Int,
         val unlockScore: Float,
-        val visualScore: Float
+        val visualScore: Float,
+        val orderScore: Float
     )
 
     fun recognize(source: Bitmap): RecognizedFrame {
@@ -29,6 +35,16 @@ class TileRecognizer {
                 if (uniqueBounds.none { overlap(it, bounds) > 0.55f }) uniqueBounds += bounds
             }
 
+        // The order icon is shown inside the brown panel at the top-right.
+        // Its position is stable in WePlay portrait mode.
+        val orderBounds = RectF(
+            source.width * 0.785f,
+            source.height * 0.095f,
+            source.width * 0.885f,
+            source.height * 0.165f
+        )
+        val orderSignature = signature(source, orderBounds)
+
         val features = uniqueBounds.mapNotNull { bounds ->
             val centerY = bounds.centerY() / source.height
             val region = when {
@@ -36,7 +52,10 @@ class TileRecognizer {
                 centerY in 0.755f..0.835f -> 1
                 else -> -1
             }
-            if (region < 0) null else Feature(bounds, signature(source, bounds), region)
+            if (region < 0) null else {
+                val tileSignature = signature(source, bounds)
+                Feature(bounds, tileSignature, region, distance(tileSignature, orderSignature))
+            }
         }
 
         val triplet = findBestTriplet(features, source.width.toFloat())
@@ -58,7 +77,12 @@ class TileRecognizer {
             else fillers[(fillerIndex++ - 1) % fillers.size]
         }
 
-        return RecognizedFrame(boardTiles = board, tray = tray, order = null)
+        val orderRecognized = triplet != null && triplet.orderScore <= ORDER_MATCH_THRESHOLD
+        return RecognizedFrame(
+            boardTiles = board,
+            tray = tray,
+            order = if (orderRecognized) ItemKind.GEM else null
+        )
     }
 
     private fun findBestTriplet(features: List<Feature>, screenWidth: Float): Triplet? {
@@ -96,7 +120,8 @@ class TileRecognizer {
                         indices = indices,
                         trayCount = 3 - boardCount,
                         unlockScore = unlockScore(indices, features, screenWidth),
-                        visualScore = visualScore
+                        visualScore = visualScore,
+                        orderScore = indices.sumOf { features[it].orderDistance.toDouble() }.toFloat() / 3f
                     )
                     if (isBetter(candidate, best)) best = candidate
                 }
@@ -107,6 +132,16 @@ class TileRecognizer {
 
     private fun isBetter(candidate: Triplet, current: Triplet?): Boolean {
         if (current == null) return true
+
+        // When the symbol in the order panel confidently matches a triplet,
+        // give it absolute priority. If recognition is uncertain, keep the
+        // normal safe strategy instead of guessing.
+        val candidateIsOrder = candidate.orderScore <= ORDER_MATCH_THRESHOLD
+        val currentIsOrder = current.orderScore <= ORDER_MATCH_THRESHOLD
+        if (candidateIsOrder != currentIsOrder) return candidateIsOrder
+        if (candidateIsOrder && abs(candidate.orderScore - current.orderScore) > 0.03f) {
+            return candidate.orderScore < current.orderScore
+        }
 
         // First finish pairs/singles already in the tray: this frees space fastest.
         if (candidate.trayCount != current.trayCount) {
@@ -297,5 +332,8 @@ class TileRecognizer {
         val area = intersection.width() * intersection.height()
         val smaller = minOf(a.width() * a.height(), b.width() * b.height())
         return if (smaller <= 0f) 0f else area / smaller
+    }
+    companion object {
+        private const val ORDER_MATCH_THRESHOLD = 0.72f
     }
 }
