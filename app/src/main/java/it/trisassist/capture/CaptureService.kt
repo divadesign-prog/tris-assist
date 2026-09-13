@@ -37,7 +37,6 @@ class CaptureService : Service() {
     private var oneTripleArmed = false
     private var autoMode = false
     private var executing = false
-    private var consecutiveMisses = 0
     private var executionCooldownUntil = 0L
     private var lastAnalysis = 0L
     private val recognizer by lazy { TileRecognizer() }
@@ -63,7 +62,6 @@ class CaptureService : Service() {
                 if (!executing) {
                     autoMode = !autoMode
                     oneTripleArmed = false
-                    consecutiveMisses = 0
                     publishControlState()
                 }
             }
@@ -166,7 +164,6 @@ class CaptureService : Service() {
                 registerAutoMiss()
             }
             else -> {
-                consecutiveMisses = 0
                 publish(suggestion.taps.map { it.bounds }, "Tris trovato")
                 val mayExecute = System.currentTimeMillis() >= executionCooldownUntil
                 if ((oneTripleArmed || autoMode) && !executing && mayExecute) {
@@ -187,15 +184,9 @@ class CaptureService : Service() {
     }
 
     private fun registerAutoMiss() {
-        if (!autoMode || executing) return
-        consecutiveMisses++
-        // A few empty frames are normal while tiles move. Stop only after the
-        // uncertainty persists, so AUTO never starts guessing.
-        if (consecutiveMisses >= 4) {
-            autoMode = false
-            consecutiveMisses = 0
-            publishControlState()
-        }
+        // Keep AUTO armed while animations run or no safe tris is visible.
+        // It will wait without touching anything and turns off only when the
+        // user long-presses the control again.
     }
 
     private fun publish(rects: List<RectF>, message: String) {
