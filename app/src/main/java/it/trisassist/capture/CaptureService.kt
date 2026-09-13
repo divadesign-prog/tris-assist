@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
+import android.graphics.PointF
 import android.graphics.RectF
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -20,6 +21,7 @@ import android.os.HandlerThread
 import android.os.IBinder
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
+import it.trisassist.accessibility.TrisAccessibilityService
 import it.trisassist.overlay.OverlayService
 import it.trisassist.vision.GamePhase
 import it.trisassist.vision.GameState
@@ -32,6 +34,8 @@ class CaptureService : Service() {
     private var display: VirtualDisplay? = null
     private var analysisThread: HandlerThread? = null
     private var stopping = false
+    private var oneTripleArmed = false
+    private var executing = false
     private var lastAnalysis = 0L
     private val recognizer by lazy { TileRecognizer() }
     private val planner = MovePlanner()
@@ -45,18 +49,26 @@ class CaptureService : Service() {
         when (intent?.action) {
             ACTION_STOP -> stopCapture()
             ACTION_START -> startCapture(intent)
+            ACTION_ONE_TRIPLE -> {
+                if (!executing) {
+                    oneTripleArmed = !oneTripleArmed
+                    publishControlState(oneTripleArmed)
+                }
+            }
         }
         return START_NOT_STICKY
     }
 
     private fun startCapture(intent: Intent) {
         stopping = false
+        oneTripleArmed = false
+        executing = false
         startForeground(
             NOTIFICATION_ID,
             NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_menu_view)
                 .setContentTitle("Tris Assist attivo")
-                .setContentText("Analisi dello schermo in corso")
+                .setContentText("Premi 1× per eseguire un solo tris")
                 .setOngoing(true)
                 .build()
         )
@@ -135,8 +147,19 @@ class CaptureService : Service() {
             frame.boardTiles.isEmpty() -> publish(emptyList(), "Cerco tessere…")
             suggestion == null -> publish(emptyList(), "Nessun tris sicuro")
             else -> {
-                val text = if (suggestion.danger) "Tris trovato — attenzione al vassoio" else "Tris trovato"
-                publish(suggestion.taps.map { it.bounds }, text)
+                publish(suggestion.taps.map { it.bounds }, "Tris trovato")
+                if (oneTripleArmed && !executing) {
+                    oneTripleArmed = false
+                    executing = true
+                    publishControlState(false)
+                    val points = suggestion.taps.take(3).map {
+                        PointF(it.bounds.centerX(), it.bounds.centerY())
+                    }
+                    val started = TrisAccessibilityService.performOneTriple(points) {
+                        executing = false
+                    }
+                    if (!started) executing = false
+                }
             }
         }
     }
@@ -150,6 +173,18 @@ class CaptureService : Service() {
                     ArrayList(rects.map { RectF(it) })
                 )
                 .putExtra(OverlayService.EXTRA_MESSAGE, message)
+        )
+    }
+
+    private fun publishControlState(armed: Boolean) {
+        sendBroadcast(
+            Intent(OverlayService.ACTION_CONTROL_STATE)
+                .setPackage(packageName)
+                .putExtra(OverlayService.EXTRA_ARMED, armed)
+                .putExtra(
+                    OverlayService.EXTRA_ACCESSIBILITY_READY,
+                    TrisAccessibilityService.isReady()
+                )
         )
     }
 
@@ -172,6 +207,8 @@ class CaptureService : Service() {
     private fun stopCapture() {
         if (stopping) return
         stopping = true
+        oneTripleArmed = false
+        executing = false
         stopService(Intent(this, OverlayService::class.java))
         reader?.setOnImageAvailableListener(null, null)
         display?.release()
@@ -204,6 +241,7 @@ class CaptureService : Service() {
     companion object {
         const val ACTION_START = "it.trisassist.START"
         const val ACTION_STOP = "it.trisassist.STOP"
+        const val ACTION_ONE_TRIPLE = "it.trisassist.ONE_TRIPLE"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
         private const val CHANNEL_ID = "capture"
