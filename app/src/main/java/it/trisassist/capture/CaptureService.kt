@@ -35,7 +35,10 @@ class CaptureService : Service() {
     private var analysisThread: HandlerThread? = null
     private var stopping = false
     private var oneTripleArmed = false
+    private var autoMode = false
     private var executing = false
+    private var consecutiveMisses = 0
+    private var executionCooldownUntil = 0L
     private var lastAnalysis = 0L
     private val recognizer by lazy { TileRecognizer() }
     private val planner = MovePlanner()
@@ -51,8 +54,17 @@ class CaptureService : Service() {
             ACTION_START -> startCapture(intent)
             ACTION_ONE_TRIPLE -> {
                 if (!executing) {
+                    autoMode = false
                     oneTripleArmed = !oneTripleArmed
-                    publishControlState(oneTripleArmed)
+                    publishControlState()
+                }
+            }
+            ACTION_AUTO -> {
+                if (!executing) {
+                    autoMode = !autoMode
+                    oneTripleArmed = false
+                    consecutiveMisses = 0
+                    publishControlState()
                 }
             }
         }
@@ -62,6 +74,7 @@ class CaptureService : Service() {
     private fun startCapture(intent: Intent) {
         stopping = false
         oneTripleArmed = false
+        autoMode = false
         executing = false
         startForeground(
             NOTIFICATION_ID,
@@ -144,23 +157,44 @@ class CaptureService : Service() {
         )
         val suggestion = planner.suggest(state)
         when {
-            frame.boardTiles.isEmpty() -> publish(emptyList(), "Cerco tessere…")
-            suggestion == null -> publish(emptyList(), "Nessun tris sicuro")
+            frame.boardTiles.isEmpty() -> {
+                publish(emptyList(), "Cerco tessere…")
+                registerAutoMiss()
+            }
+            suggestion == null -> {
+                publish(emptyList(), "Nessun tris sicuro")
+                registerAutoMiss()
+            }
             else -> {
+                consecutiveMisses = 0
                 publish(suggestion.taps.map { it.bounds }, "Tris trovato")
-                if (oneTripleArmed && !executing) {
+                val mayExecute = System.currentTimeMillis() >= executionCooldownUntil
+                if ((oneTripleArmed || autoMode) && !executing && mayExecute) {
                     oneTripleArmed = false
                     executing = true
-                    publishControlState(false)
+                    publishControlState()
                     val points = suggestion.taps.take(3).map {
                         PointF(it.bounds.centerX(), it.bounds.centerY())
                     }
                     val started = TrisAccessibilityService.performOneTriple(points) {
                         executing = false
+                        executionCooldownUntil = System.currentTimeMillis() + 420L
                     }
                     if (!started) executing = false
                 }
             }
+        }
+    }
+
+    private fun registerAutoMiss() {
+        if (!autoMode || executing) return
+        consecutiveMisses++
+        // A few empty frames are normal while tiles move. Stop only after the
+        // uncertainty persists, so AUTO never starts guessing.
+        if (consecutiveMisses >= 4) {
+            autoMode = false
+            consecutiveMisses = 0
+            publishControlState()
         }
     }
 
@@ -176,11 +210,12 @@ class CaptureService : Service() {
         )
     }
 
-    private fun publishControlState(armed: Boolean) {
+    private fun publishControlState() {
         sendBroadcast(
             Intent(OverlayService.ACTION_CONTROL_STATE)
                 .setPackage(packageName)
-                .putExtra(OverlayService.EXTRA_ARMED, armed)
+                .putExtra(OverlayService.EXTRA_ARMED, oneTripleArmed)
+                .putExtra(OverlayService.EXTRA_AUTO, autoMode)
                 .putExtra(
                     OverlayService.EXTRA_ACCESSIBILITY_READY,
                     TrisAccessibilityService.isReady()
@@ -208,6 +243,7 @@ class CaptureService : Service() {
         if (stopping) return
         stopping = true
         oneTripleArmed = false
+        autoMode = false
         executing = false
         stopService(Intent(this, OverlayService::class.java))
         reader?.setOnImageAvailableListener(null, null)
@@ -242,6 +278,7 @@ class CaptureService : Service() {
         const val ACTION_START = "it.trisassist.START"
         const val ACTION_STOP = "it.trisassist.STOP"
         const val ACTION_ONE_TRIPLE = "it.trisassist.ONE_TRIPLE"
+        const val ACTION_AUTO = "it.trisassist.AUTO"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
         private const val CHANNEL_ID = "capture"
