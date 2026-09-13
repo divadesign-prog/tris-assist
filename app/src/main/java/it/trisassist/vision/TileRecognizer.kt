@@ -17,7 +17,13 @@ class TileRecognizer {
         val bounds: RectF,
         val signature: FloatArray,
         val region: Int,
-        val orderDistance: Float
+        val orderDistance: Float,
+        var hiddenDepth: Int = 0
+    )
+    private data class RememberedFeature(
+        var bounds: RectF,
+        val signature: FloatArray,
+        var lastSeenFrame: Long
     )
     private data class Triplet(
         val indices: IntArray,
@@ -26,6 +32,10 @@ class TileRecognizer {
         val visualScore: Float,
         val orderScore: Float
     )
+
+    private val layerMemory = mutableListOf<RememberedFeature>()
+    private var frameNumber = 0L
+    private var nearlyEmptyFrames = 0
 
     fun recognize(source: Bitmap): RecognizedFrame {
         val uniqueBounds = mutableListOf<RectF>()
@@ -57,6 +67,7 @@ class TileRecognizer {
                 Feature(bounds, tileSignature, region, distance(tileSignature, orderSignature))
             }
         }
+        updateLayerMemory(features)
 
         val triplet = findBestTriplet(features, source.width.toFloat())
         val chosen = triplet?.indices?.toSet().orEmpty()
@@ -176,9 +187,54 @@ class TileRecognizer {
             }
             val centrality = 1f - (abs(selected.bounds.centerX() - screenWidth / 2f) / (screenWidth / 2f))
                 .coerceIn(0f, 1f)
-            total += near.coerceAtMost(8) / 8f + centrality * 0.35f
+            val layerBenefit = selected.hiddenDepth.coerceAtMost(4) * 0.45f
+            total += near.coerceAtMost(8) / 8f + centrality * 0.35f + layerBenefit
         }
         return if (count == 0) 0f else total / count
+    }
+
+    private fun updateLayerMemory(features: List<Feature>) {
+        frameNumber++
+        val board = features.filter { it.region == 0 }
+
+        // Several nearly empty frames indicate a new round or the end of one.
+        nearlyEmptyFrames = if (board.size <= 2) nearlyEmptyFrames + 1 else 0
+        if (nearlyEmptyFrames >= 5) {
+            layerMemory.clear()
+            nearlyEmptyFrames = 0
+        }
+
+        board.forEach { candidate ->
+            val same = layerMemory.firstOrNull { remembered ->
+                overlap(remembered.bounds, candidate.bounds) > 0.68f &&
+                    distance(remembered.signature, candidate.signature) < 0.32f
+            }
+            if (same != null) {
+                same.bounds = RectF(candidate.bounds)
+                same.lastSeenFrame = frameNumber
+            } else {
+                layerMemory += RememberedFeature(
+                    bounds = RectF(candidate.bounds),
+                    signature = candidate.signature.copyOf(),
+                    lastSeenFrame = frameNumber
+                )
+            }
+        }
+
+        // A current tile can cover remembered tiles at the same or a nearby
+        // position. This depth estimate lets the planner prefer moves that
+        // uncover more of the board without ever tapping a hidden tile.
+        board.forEach { visible ->
+            visible.hiddenDepth = layerMemory.count { remembered ->
+                overlap(remembered.bounds, visible.bounds) > 0.20f &&
+                    distance(remembered.signature, visible.signature) > 0.24f
+            }
+        }
+
+        if (layerMemory.size > 180) {
+            layerMemory.sortByDescending { it.lastSeenFrame }
+            layerMemory.subList(180, layerMemory.size).clear()
+        }
     }
 
     private fun distance(a: FloatArray, b: FloatArray): Float {
