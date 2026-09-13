@@ -29,13 +29,20 @@ class MainActivity : AppCompatActivity() {
                 putExtra(CaptureService.EXTRA_RESULT_DATA, result.data)
             }
             ContextCompat.startForegroundService(this, service)
-            status.text = "Assistente attivo. Apri il gioco."
+            status.text = "Assistente attivo. Apri il gioco e premi 1× per un solo tris."
         } else status.text = "Cattura schermo non autorizzata."
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         status = TextView(this).apply { text = "Pronto"; textSize = 18f }
+        val accessibility = Button(this).apply {
+            text = "Autorizza tocchi"
+            setOnClickListener {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                status.text = "Apri App installate, scegli Tris Assist e attivalo."
+            }
+        }
         val start = Button(this).apply {
             text = "Avvia assistente"
             setOnClickListener { startAssistant() }
@@ -57,9 +64,10 @@ class MainActivity : AppCompatActivity() {
                 textSize = 30f
             })
             addView(TextView(context).apply {
-                text = "Evidenzia le mosse; non tocca il gioco."
+                text = "Modalità di prova: esegue un solo tris quando premi 1×."
                 textSize = 16f
             })
+            addView(accessibility)
             addView(start)
             addView(stop)
             addView(status)
@@ -69,8 +77,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun startAssistant() {
         if (!Settings.canDrawOverlays(this)) {
-            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")))
+            startActivity(Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            ))
             status.text = "Consenti 'Mostra sopra altre app', poi premi Avvia."
             return
         }
