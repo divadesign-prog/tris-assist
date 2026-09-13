@@ -29,7 +29,7 @@ class MainActivity : AppCompatActivity() {
                 putExtra(CaptureService.EXTRA_RESULT_DATA, result.data)
             }
             ContextCompat.startForegroundService(this, service)
-            status.text = "Assistente attivo. Apri il gioco e premi 1× per un solo tris."
+            status.text = "Attivo: tocca 1× per un tris; tienilo premuto per AUTO."
         } else status.text = "Cattura schermo non autorizzata."
     }
 
@@ -64,7 +64,7 @@ class MainActivity : AppCompatActivity() {
                 textSize = 30f
             })
             addView(TextView(context).apply {
-                text = "Modalità di prova: esegue un solo tris quando premi 1×."
+                text = "Tocco breve: un tris. Pressione lunga: AUTO acceso/spento. AUTO parte sempre spento."
                 textSize = 16f
             })
             addView(accessibility)
