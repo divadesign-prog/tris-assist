@@ -103,7 +103,7 @@ class CaptureService : Service() {
         reader?.setOnImageAvailableListener({ source ->
             val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
             val now = System.currentTimeMillis()
-            if (now - lastAnalysis < 650L) {
+            if (now - lastAnalysis < 350L) {
                 image.close()
                 return@setOnImageAvailableListener
             }
