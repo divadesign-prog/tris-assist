@@ -83,8 +83,14 @@ class TileRecognizer {
                     val boardCount = indices.count { features[it].region == 0 }
                     if (boardCount == 0 || boardCount > freeSlots) continue
 
-                    val visualScore = maxOf(distances[a][b], distances[a][c], distances[b][c])
-                    if (visualScore > 0.50f) continue
+                    val distanceAB = distances[a][b]
+                    val distanceAC = distances[a][c]
+                    val distanceBC = distances[b][c]
+                    val visualScore = maxOf(distanceAB, distanceAC, distanceBC)
+                    val averageScore = (distanceAB + distanceAC + distanceBC) / 3f
+                    // Accept small changes in crop/lighting (especially milk, meat,
+                    // gloves and diamonds), but still require all three matches.
+                    if (visualScore > 0.60f || averageScore > 0.52f) continue
 
                     val candidate = Triplet(
                         indices = indices,
@@ -141,12 +147,37 @@ class TileRecognizer {
     }
 
     private fun distance(a: FloatArray, b: FloatArray): Float {
-        var sum = 0f
-        for (i in a.indices) {
-            val delta = a[i] - b[i]
-            sum += delta * delta
+        // Tile bounds can differ by a few pixels when a neighbour partially
+        // covers an edge. Compare nine tiny alignments and keep the best one.
+        val side = 20
+        val channels = 3
+        var best = Float.MAX_VALUE
+        for (shiftY in -1..1) {
+            for (shiftX in -1..1) {
+                var sum = 0f
+                var count = 0
+                for (y in 0 until side) {
+                    val otherY = y + shiftY
+                    if (otherY !in 0 until side) continue
+                    for (x in 0 until side) {
+                        val otherX = x + shiftX
+                        if (otherX !in 0 until side) continue
+                        val first = (y * side + x) * channels
+                        val second = (otherY * side + otherX) * channels
+                        for (channel in 0 until channels) {
+                            val delta = a[first + channel] - b[second + channel]
+                            sum += delta * delta
+                            count++
+                        }
+                    }
+                }
+                if (count > 0) {
+                    val shiftPenalty = (abs(shiftX) + abs(shiftY)) * 0.012f
+                    best = minOf(best, sqrt(sum / count) + shiftPenalty)
+                }
+            }
         }
-        return sqrt(sum / a.size)
+        return best
     }
 
     private fun signature(source: Bitmap, bounds: RectF): FloatArray {
