@@ -27,6 +27,7 @@ class OverlayService : Service() {
     private var bubble: TextView? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var armed = false
+    private var autoMode = false
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -42,6 +43,7 @@ class OverlayService : Service() {
                 }
                 ACTION_CONTROL_STATE -> {
                     armed = intent.getBooleanExtra(EXTRA_ARMED, false)
+                    autoMode = intent.getBooleanExtra(EXTRA_AUTO, false)
                     updateBubble()
                 }
             }
@@ -138,7 +140,10 @@ class OverlayService : Service() {
                 }
                 MotionEvent.ACTION_UP -> {
                     val moved = abs(event.rawX - downRawX) + abs(event.rawY - downRawY)
-                    if (moved < 14f * resources.displayMetrics.density) onBubbleTap()
+                    val held = event.eventTime - event.downTime
+                    if (moved < 14f * resources.displayMetrics.density) {
+                        if (held >= 650L) onBubbleLongPress() else onBubbleTap()
+                    }
                     getSharedPreferences("overlay", MODE_PRIVATE)
                         .edit().putInt("bubble_y", params.y).apply()
                     true
@@ -160,8 +165,26 @@ class OverlayService : Service() {
         })
     }
 
+    private fun onBubbleLongPress() {
+        if (!TrisAccessibilityService.isReady()) {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+            return
+        }
+        startService(Intent(this, CaptureService::class.java).apply {
+            action = CaptureService.ACTION_AUTO
+        })
+    }
+
     private fun updateBubble() {
-        val fill = if (armed) Color.rgb(31, 190, 72) else Color.argb(205, 55, 62, 68)
+        bubble?.text = if (autoMode) "AUTO" else "1×"
+        bubble?.textSize = if (autoMode) 10f else 15f
+        val fill = when {
+            autoMode -> Color.rgb(31, 190, 72)
+            armed -> Color.rgb(238, 160, 35)
+            else -> Color.argb(205, 55, 62, 68)
+        }
         bubble?.background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(fill)
@@ -187,6 +210,7 @@ class OverlayService : Service() {
         const val EXTRA_RECTS = "rects"
         const val EXTRA_MESSAGE = "message"
         const val EXTRA_ARMED = "armed"
+        const val EXTRA_AUTO = "auto"
         const val EXTRA_ACCESSIBILITY_READY = "accessibilityReady"
     }
 }
