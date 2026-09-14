@@ -31,11 +31,11 @@ class TrisAccessibilityService : AccessibilityService() {
         val point = points[index]
         val path = Path().apply { moveTo(point.x, point.y) }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 35))
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 30))
             .build()
         dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                handler.postDelayed({ tapSequence(points, index + 1, finished) }, 130L)
+                handler.postDelayed({ tapSequence(points, index + 1, finished) }, 90L)
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
                 finished()
