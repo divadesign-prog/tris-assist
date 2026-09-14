@@ -114,7 +114,7 @@ class CaptureService : Service() {
         reader?.setOnImageAvailableListener({ source ->
             val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
             val now = System.currentTimeMillis()
-            if (now - lastAnalysis < 350L) {
+            if (now - lastAnalysis < 200L) {
                 image.close()
                 return@setOnImageAvailableListener
             }
@@ -175,7 +175,7 @@ class CaptureService : Service() {
                     }
                     val started = TrisAccessibilityService.performOneTriple(points) {
                         executing = false
-                        executionCooldownUntil = System.currentTimeMillis() + 250L
+                        executionCooldownUntil = System.currentTimeMillis() + 150L
                     }
                     if (!started) executing = false
                 }
