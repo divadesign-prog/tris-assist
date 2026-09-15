@@ -27,7 +27,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: app/trisassist-debug.keystore
-          key: tris-assist-debug-signing-v2
+          key: tris-assist-debug-signing-v3
       - name: Crea firma se assente
         run: |
           if [ ! -f app/trisassist-debug.keystore ]; then
