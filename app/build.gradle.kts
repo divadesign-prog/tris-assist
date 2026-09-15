@@ -11,8 +11,8 @@ android {
         applicationId = "it.trisassist"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 18
+        versionName = "0.18.0"
     }
 
     buildFeatures { viewBinding = false }
