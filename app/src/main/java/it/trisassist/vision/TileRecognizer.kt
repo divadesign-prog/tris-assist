@@ -74,7 +74,8 @@ class TileRecognizer {
         }
         updateLayerMemory(features)
 
-        val triplet = findBestTriplet(features, source.width.toFloat())
+        val traySize = detectTrayOccupancy(source)
+        val triplet = findBestTriplet(features, source.width.toFloat(), traySize)
         val chosen = triplet?.indices?.toSet().orEmpty()
         val board = features.mapIndexedNotNull { index, feature ->
             if (feature.region != 0 || index !in chosen) null else TileDetection(
@@ -87,10 +88,10 @@ class TileRecognizer {
 
         var fillerIndex = 1
         val fillers = ItemKind.values().filter { it != ItemKind.UNKNOWN && it != ItemKind.GEM }
-        val tray = features.mapIndexedNotNull { index, feature ->
-            if (feature.region != 1) null
-            else if (index in chosen) ItemKind.GEM
-            else fillers[(fillerIndex++ - 1) % fillers.size]
+        // Count the seven physical tray slots directly. Adjacent tiles can
+        // visually merge into one component, so component counting is unsafe.
+        val tray = List(traySize) {
+            fillers[(fillerIndex++ - 1) % fillers.size]
         }
 
         val orderRecognized = triplet != null && triplet.orderScore <= ORDER_MATCH_THRESHOLD
@@ -101,10 +102,39 @@ class TileRecognizer {
         )
     }
 
-    private fun findBestTriplet(features: List<Feature>, screenWidth: Float): Triplet? {
+    private fun detectTrayOccupancy(source: Bitmap): Int {
+        val centersX = floatArrayOf(0.18f, 0.286f, 0.392f, 0.498f, 0.604f, 0.710f, 0.816f)
+        val centerY = (source.height * 0.790f).toInt().coerceIn(0, source.height - 1)
+        val halfWidth = (source.width * 0.040f).toInt().coerceAtLeast(3)
+        val halfHeight = (source.height * 0.018f).toInt().coerceAtLeast(3)
+        var occupied = 0
+
+        for (ratioX in centersX) {
+            val centerX = (source.width * ratioX).toInt()
+            var bright = 0
+            var sampled = 0
+            var y = (centerY - halfHeight).coerceAtLeast(0)
+            while (y <= (centerY + halfHeight).coerceAtMost(source.height - 1)) {
+                var x = (centerX - halfWidth).coerceAtLeast(0)
+                while (x <= (centerX + halfWidth).coerceAtMost(source.width - 1)) {
+                    val color = source.getPixel(x, y)
+                    val red = (color shr 16) and 255
+                    val green = (color shr 8) and 255
+                    val blue = color and 255
+                    if (red > 188 && green > 188 && blue > 135) bright++
+                    sampled++
+                    x += 4
+                }
+                y += 4
+            }
+            if (sampled > 0 && bright.toFloat() / sampled > 0.34f) occupied++
+        }
+        return occupied.coerceIn(0, 7)
+    }
+
+    private fun findBestTriplet(features: List<Feature>, screenWidth: Float, traySize: Int): Triplet? {
         if (features.size < 3) return null
 
-        val traySize = features.count { it.region == 1 }.coerceAtMost(7)
         val freeSlots = (7 - traySize).coerceAtLeast(0)
         if (freeSlots < 3) return null
 
@@ -133,7 +163,9 @@ class TileRecognizer {
                     val averageScore = (distanceAB + distanceAC + distanceBC) / 3f
                     // Accept small changes in crop/lighting (especially milk, meat,
                     // gloves and diamonds), but still require all three matches.
-                    if (visualScore > 0.48f || averageScore > 0.40f) continue
+                    if (visualScore > 0.42f || averageScore > 0.32f ||
+                        minOf(distanceAB, distanceAC, distanceBC) > 0.22f
+                    ) continue
 
                     val candidate = Triplet(
                         indices = indices,
