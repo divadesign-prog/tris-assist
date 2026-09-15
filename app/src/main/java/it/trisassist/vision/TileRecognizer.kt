@@ -56,8 +56,13 @@ class TileRecognizer {
         val orderSignature = signature(source, orderBounds)
 
         val features = uniqueBounds.mapNotNull { bounds ->
+            val centerX = bounds.centerX() / source.width
             val centerY = bounds.centerY() / source.height
+            // The blue public-storage panel belongs to the whole team. It is
+            // deliberately excluded: Tris Assist must never choose from it.
+            val publicStorage = centerX in 0.50f..0.94f && centerY in 0.63f..0.78f
             val region = when {
+                publicStorage -> -1
                 centerY in 0.18f..0.72f -> 0
                 centerY in 0.755f..0.835f -> 1
                 else -> -1
