@@ -161,11 +161,9 @@ class TileRecognizer {
                     val distanceBC = distances[b][c]
                     val visualScore = maxOf(distanceAB, distanceAC, distanceBC)
                     val averageScore = (distanceAB + distanceAC + distanceBC) / 3f
-                    // Accept small changes in crop/lighting (especially milk, meat,
-                    // gloves and diamonds), but still require all three matches.
-                    if (visualScore > 0.42f || averageScore > 0.32f ||
-                        minOf(distanceAB, distanceAC, distanceBC) > 0.22f
-                    ) continue
+                    // Restore the more tolerant recognition that worked better in play,
+                    // while still requiring a complete visible triplet.
+                    if (visualScore > 0.48f || averageScore > 0.40f) continue
 
                     val candidate = Triplet(
                         indices = indices,
