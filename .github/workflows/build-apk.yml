@@ -23,6 +23,11 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
+      - name: Mantieni firma stabile
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: tris-assist-debug-signing-v1
       - name: Compila APK debug
         run: gradle --no-daemon assembleDebug
       - name: Pubblica APK
