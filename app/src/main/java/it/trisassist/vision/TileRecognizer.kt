@@ -136,7 +136,7 @@ class TileRecognizer {
         if (features.size < 3) return null
 
         val freeSlots = (7 - traySize).coerceAtLeast(0)
-        if (freeSlots < 3) return null
+        if (freeSlots == 0) return null
 
         val distances = Array(features.size) { FloatArray(features.size) }
         for (i in features.indices) for (j in i + 1 until features.size) {
@@ -151,10 +151,10 @@ class TileRecognizer {
                 for (c in b + 1 until features.size) {
                     val indices = intArrayOf(a, b, c)
                     val boardCount = indices.count { features[it].region == 0 }
-                    // Safe AUTO rule: never build an incomplete group using
-                    // one or two tiles from the tray. Only a complete visible
-                    // triplet may be moved, and it needs three free slots.
-                    if (boardCount != 3) continue
+                    // Complete matching pairs/singles already in the tray.
+                    // Only board tiles are tapped, so require exactly as many
+                    // free physical slots as the candidate will add.
+                    if (boardCount == 0 || boardCount > freeSlots) continue
 
                     val distanceAB = distances[a][b]
                     val distanceAC = distances[a][c]
