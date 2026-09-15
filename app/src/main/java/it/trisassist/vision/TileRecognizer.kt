@@ -279,7 +279,7 @@ class TileRecognizer {
         // Tile bounds can differ by a few pixels when a neighbour partially
         // covers an edge. Compare nine tiny alignments and keep the best one.
         val side = 20
-        val channels = 3
+        val channels = 6
         var best = Float.MAX_VALUE
         for (shiftY in -1..1) {
             for (shiftX in -1..1) {
@@ -310,8 +310,8 @@ class TileRecognizer {
     }
 
     private fun signature(source: Bitmap, bounds: RectF): FloatArray {
-        val insetX = bounds.width() * 0.08f
-        val insetY = bounds.height() * 0.08f
+        val insetX = bounds.width() * 0.14f
+        val insetY = bounds.height() * 0.14f
         val left = (bounds.left + insetX).toInt().coerceIn(0, source.width - 1)
         val top = (bounds.top + insetY).toInt().coerceIn(0, source.height - 1)
         val right = (bounds.right - insetX).toInt().coerceIn(left + 1, source.width)
@@ -323,24 +323,29 @@ class TileRecognizer {
         scaled.getPixels(pixels, 0, 20, 0, 0, 20, 20)
         scaled.recycle()
 
-        val values = FloatArray(400 * 3)
+        val values = FloatArray(400 * 6)
         val means = FloatArray(3)
         pixels.forEachIndexed { index, color ->
             val channels = intArrayOf((color shr 16) and 255, (color shr 8) and 255, color and 255)
             for (channel in 0..2) {
-                values[index * 3 + channel] = channels[channel].toFloat()
-                means[channel] += channels[channel]
+                val raw = channels[channel].toFloat()
+                values[index * 6 + channel] = raw
+                // Preserve some absolute colour/brightness information. The
+                // old fully-normalised signature erased much of the pale
+                // cotton/cloud and small green sprout/grass symbols.
+                values[index * 6 + 3 + channel] = ((raw - 128f) / 128f) * 0.70f
+                means[channel] += raw
             }
         }
         for (channel in 0..2) means[channel] /= 400f
         val deviations = FloatArray(3)
         for (i in 0 until 400) for (channel in 0..2) {
-            val d = values[i * 3 + channel] - means[channel]
+            val d = values[i * 6 + channel] - means[channel]
             deviations[channel] += d * d
         }
         for (channel in 0..2) deviations[channel] = max(12f, sqrt(deviations[channel] / 400f))
         for (i in 0 until 400) for (channel in 0..2) {
-            values[i * 3 + channel] = (values[i * 3 + channel] - means[channel]) / deviations[channel]
+            values[i * 6 + channel] = (values[i * 6 + channel] - means[channel]) / deviations[channel]
         }
         return values
     }
