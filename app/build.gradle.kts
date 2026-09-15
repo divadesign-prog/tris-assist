@@ -7,12 +7,27 @@ android {
     namespace = "it.trisassist"
     compileSdk = 35
 
+    signingConfigs {
+        create("stableDebug") {
+            storeFile = file("trisassist-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     defaultConfig {
         applicationId = "it.trisassist"
         minSdk = 26
         targetSdk = 35
-        versionCode = 19
-        versionName = "0.19.0"
+        versionCode = 20
+        versionName = "0.20.0"
+    }
+
+    buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("stableDebug")
+        }
     }
 
     buildFeatures { viewBinding = false }
