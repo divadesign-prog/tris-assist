@@ -26,8 +26,21 @@ jobs:
       - name: Mantieni firma stabile
         uses: actions/cache@v4
         with:
-          path: ~/.android/debug.keystore
-          key: tris-assist-debug-signing-v1
+          path: app/trisassist-debug.keystore
+          key: tris-assist-debug-signing-v2
+      - name: Crea firma se assente
+        run: |
+          if [ ! -f app/trisassist-debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore app/trisassist-debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Tris Assist,O=Tris Assist,C=IT"
+          fi
       - name: Compila APK debug
         run: gradle --no-daemon assembleDebug
       - name: Pubblica APK
