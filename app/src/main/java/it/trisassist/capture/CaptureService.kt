@@ -167,12 +167,18 @@ class CaptureService : Service() {
                 publish(suggestion.taps.map { it.bounds }, "Tris trovato")
                 val mayExecute = System.currentTimeMillis() >= executionCooldownUntil
                 if ((oneTripleArmed || autoMode) && !executing && mayExecute) {
-                    oneTripleArmed = false
-                    executing = true
-                    publishControlState()
                     val points = suggestion.taps.take(3).map {
                         PointF(it.bounds.centerX(), it.bounds.centerY())
                     }
+                    // Defence in depth: even if vision misclassifies the blue
+                    // team storage, AUTO refuses every point inside that area.
+                    if (autoMode && points.any { isInsidePublicStorage(it, bitmap) }) {
+                        publish(emptyList(), "Magazzino pubblico protetto")
+                        return
+                    }
+                    oneTripleArmed = false
+                    executing = true
+                    publishControlState()
                     val started = TrisAccessibilityService.performOneTriple(points) {
                         executing = false
                         executionCooldownUntil = System.currentTimeMillis() + 150L
@@ -181,6 +187,12 @@ class CaptureService : Service() {
                 }
             }
         }
+    }
+
+    private fun isInsidePublicStorage(point: PointF, bitmap: Bitmap): Boolean {
+        val x = point.x / bitmap.width
+        val y = point.y / bitmap.height
+        return x in 0.50f..0.94f && y in 0.63f..0.78f
     }
 
     private fun registerAutoMiss() {
