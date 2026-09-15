@@ -181,7 +181,7 @@ class CaptureService : Service() {
                     publishControlState()
                     val started = TrisAccessibilityService.performOneTriple(points) {
                         executing = false
-                        executionCooldownUntil = System.currentTimeMillis() + 150L
+                        executionCooldownUntil = System.currentTimeMillis() + 350L
                     }
                     if (!started) executing = false
                 }
