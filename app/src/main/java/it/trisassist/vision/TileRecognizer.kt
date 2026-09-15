@@ -60,11 +60,11 @@ class TileRecognizer {
             val centerY = bounds.centerY() / source.height
             // The blue public-storage panel belongs to the whole team. It is
             // deliberately excluded: Tris Assist must never choose from it.
-            val publicStorage = centerX in 0.50f..0.94f && centerY in 0.63f..0.78f
+            val publicStorage = centerX in 0.50f..0.94f && centerY in 0.63f..0.755f
             val region = when {
                 publicStorage -> -1
                 centerY in 0.18f..0.72f -> 0
-                centerY in 0.755f..0.835f -> 1
+                centerY in 0.765f..0.850f -> 1
                 else -> -1
             }
             if (region < 0) null else {
@@ -106,7 +106,7 @@ class TileRecognizer {
 
         val traySize = features.count { it.region == 1 }.coerceAtMost(7)
         val freeSlots = (7 - traySize).coerceAtLeast(0)
-        if (freeSlots == 0) return null
+        if (freeSlots < 3) return null
 
         val distances = Array(features.size) { FloatArray(features.size) }
         for (i in features.indices) for (j in i + 1 until features.size) {
@@ -121,7 +121,10 @@ class TileRecognizer {
                 for (c in b + 1 until features.size) {
                     val indices = intArrayOf(a, b, c)
                     val boardCount = indices.count { features[it].region == 0 }
-                    if (boardCount == 0 || boardCount > freeSlots) continue
+                    // Safe AUTO rule: never build an incomplete group using
+                    // one or two tiles from the tray. Only a complete visible
+                    // triplet may be moved, and it needs three free slots.
+                    if (boardCount != 3) continue
 
                     val distanceAB = distances[a][b]
                     val distanceAC = distances[a][c]
@@ -130,7 +133,7 @@ class TileRecognizer {
                     val averageScore = (distanceAB + distanceAC + distanceBC) / 3f
                     // Accept small changes in crop/lighting (especially milk, meat,
                     // gloves and diamonds), but still require all three matches.
-                    if (visualScore > 0.60f || averageScore > 0.52f) continue
+                    if (visualScore > 0.48f || averageScore > 0.40f) continue
 
                     val candidate = Triplet(
                         indices = indices,
