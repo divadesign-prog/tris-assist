@@ -13,29 +13,13 @@ data class RecognizedFrame(
 )
 
 class TileRecognizer {
-    private data class Feature(
-        val bounds: RectF,
-        val signature: FloatArray,
-        val region: Int,
-        val orderDistance: Float,
-        var hiddenDepth: Int = 0
-    )
-    private data class RememberedFeature(
-        var bounds: RectF,
-        val signature: FloatArray,
-        var lastSeenFrame: Long
-    )
+    private data class Feature(val bounds: RectF, val signature: FloatArray, val region: Int)
     private data class Triplet(
         val indices: IntArray,
         val trayCount: Int,
         val unlockScore: Float,
-        val visualScore: Float,
-        val orderScore: Float
+        val visualScore: Float
     )
-
-    private val layerMemory = mutableListOf<RememberedFeature>()
-    private var frameNumber = 0L
-    private var nearlyEmptyFrames = 0
 
     fun recognize(source: Bitmap): RecognizedFrame {
         val uniqueBounds = mutableListOf<RectF>()
@@ -45,37 +29,17 @@ class TileRecognizer {
                 if (uniqueBounds.none { overlap(it, bounds) > 0.55f }) uniqueBounds += bounds
             }
 
-        // The order icon is shown inside the brown panel at the top-right.
-        // Its position is stable in WePlay portrait mode.
-        val orderBounds = RectF(
-            source.width * 0.785f,
-            source.height * 0.095f,
-            source.width * 0.885f,
-            source.height * 0.165f
-        )
-        val orderSignature = signature(source, orderBounds)
-
         val features = uniqueBounds.mapNotNull { bounds ->
-            val centerX = bounds.centerX() / source.width
             val centerY = bounds.centerY() / source.height
-            // The blue public-storage panel belongs to the whole team. It is
-            // deliberately excluded: Tris Assist must never choose from it.
-            val publicStorage = centerX in 0.50f..0.94f && centerY in 0.63f..0.755f
             val region = when {
-                publicStorage -> -1
                 centerY in 0.18f..0.72f -> 0
-                centerY in 0.765f..0.850f -> 1
+                centerY in 0.755f..0.835f -> 1
                 else -> -1
             }
-            if (region < 0) null else {
-                val tileSignature = signature(source, bounds)
-                Feature(bounds, tileSignature, region, distance(tileSignature, orderSignature))
-            }
+            if (region < 0) null else Feature(bounds, signature(source, bounds), region)
         }
-        updateLayerMemory(features)
 
-        val traySize = detectTrayOccupancy(source)
-        val triplet = findBestTriplet(features, source.width.toFloat(), traySize)
+        val triplet = findBestTriplet(features, source.width.toFloat())
         val chosen = triplet?.indices?.toSet().orEmpty()
         val board = features.mapIndexedNotNull { index, feature ->
             if (feature.region != 0 || index !in chosen) null else TileDetection(
@@ -88,53 +52,19 @@ class TileRecognizer {
 
         var fillerIndex = 1
         val fillers = ItemKind.values().filter { it != ItemKind.UNKNOWN && it != ItemKind.GEM }
-        // Count the seven physical tray slots directly. Adjacent tiles can
-        // visually merge into one component, so component counting is unsafe.
-        val tray = List(traySize) {
-            fillers[(fillerIndex++ - 1) % fillers.size]
+        val tray = features.mapIndexedNotNull { index, feature ->
+            if (feature.region != 1) null
+            else if (index in chosen) ItemKind.GEM
+            else fillers[(fillerIndex++ - 1) % fillers.size]
         }
 
-        val orderRecognized = triplet != null && triplet.orderScore <= ORDER_MATCH_THRESHOLD
-        return RecognizedFrame(
-            boardTiles = board,
-            tray = tray,
-            order = if (orderRecognized) ItemKind.GEM else null
-        )
+        return RecognizedFrame(boardTiles = board, tray = tray, order = null)
     }
 
-    private fun detectTrayOccupancy(source: Bitmap): Int {
-        val centersX = floatArrayOf(0.18f, 0.286f, 0.392f, 0.498f, 0.604f, 0.710f, 0.816f)
-        val centerY = (source.height * 0.790f).toInt().coerceIn(0, source.height - 1)
-        val halfWidth = (source.width * 0.040f).toInt().coerceAtLeast(3)
-        val halfHeight = (source.height * 0.018f).toInt().coerceAtLeast(3)
-        var occupied = 0
-
-        for (ratioX in centersX) {
-            val centerX = (source.width * ratioX).toInt()
-            var bright = 0
-            var sampled = 0
-            var y = (centerY - halfHeight).coerceAtLeast(0)
-            while (y <= (centerY + halfHeight).coerceAtMost(source.height - 1)) {
-                var x = (centerX - halfWidth).coerceAtLeast(0)
-                while (x <= (centerX + halfWidth).coerceAtMost(source.width - 1)) {
-                    val color = source.getPixel(x, y)
-                    val red = (color shr 16) and 255
-                    val green = (color shr 8) and 255
-                    val blue = color and 255
-                    if (red > 188 && green > 188 && blue > 135) bright++
-                    sampled++
-                    x += 4
-                }
-                y += 4
-            }
-            if (sampled > 0 && bright.toFloat() / sampled > 0.34f) occupied++
-        }
-        return occupied.coerceIn(0, 7)
-    }
-
-    private fun findBestTriplet(features: List<Feature>, screenWidth: Float, traySize: Int): Triplet? {
+    private fun findBestTriplet(features: List<Feature>, screenWidth: Float): Triplet? {
         if (features.size < 3) return null
 
+        val traySize = features.count { it.region == 1 }.coerceAtMost(7)
         val freeSlots = (7 - traySize).coerceAtLeast(0)
         if (freeSlots == 0) return null
 
@@ -151,9 +81,6 @@ class TileRecognizer {
                 for (c in b + 1 until features.size) {
                     val indices = intArrayOf(a, b, c)
                     val boardCount = indices.count { features[it].region == 0 }
-                    // Complete matching pairs/singles already in the tray.
-                    // Only board tiles are tapped, so require exactly as many
-                    // free physical slots as the candidate will add.
                     if (boardCount == 0 || boardCount > freeSlots) continue
 
                     val distanceAB = distances[a][b]
@@ -161,16 +88,15 @@ class TileRecognizer {
                     val distanceBC = distances[b][c]
                     val visualScore = maxOf(distanceAB, distanceAC, distanceBC)
                     val averageScore = (distanceAB + distanceAC + distanceBC) / 3f
-                    // Restore the more tolerant recognition that worked better in play,
-                    // while still requiring a complete visible triplet.
+                    // Accept small changes in crop/lighting (especially milk, meat,
+                    // gloves and diamonds), but still require all three matches.
                     if (visualScore > 0.60f || averageScore > 0.52f) continue
 
                     val candidate = Triplet(
                         indices = indices,
                         trayCount = 3 - boardCount,
                         unlockScore = unlockScore(indices, features, screenWidth),
-                        visualScore = visualScore,
-                        orderScore = indices.sumOf { features[it].orderDistance.toDouble() }.toFloat() / 3f
+                        visualScore = visualScore
                     )
                     if (isBetter(candidate, best)) best = candidate
                 }
@@ -181,16 +107,6 @@ class TileRecognizer {
 
     private fun isBetter(candidate: Triplet, current: Triplet?): Boolean {
         if (current == null) return true
-
-        // When the symbol in the order panel confidently matches a triplet,
-        // give it absolute priority. If recognition is uncertain, keep the
-        // normal safe strategy instead of guessing.
-        val candidateIsOrder = candidate.orderScore <= ORDER_MATCH_THRESHOLD
-        val currentIsOrder = current.orderScore <= ORDER_MATCH_THRESHOLD
-        if (candidateIsOrder != currentIsOrder) return candidateIsOrder
-        if (candidateIsOrder && abs(candidate.orderScore - current.orderScore) > 0.03f) {
-            return candidate.orderScore < current.orderScore
-        }
 
         // First finish pairs/singles already in the tray: this frees space fastest.
         if (candidate.trayCount != current.trayCount) {
@@ -225,71 +141,25 @@ class TileRecognizer {
             }
             val centrality = 1f - (abs(selected.bounds.centerX() - screenWidth / 2f) / (screenWidth / 2f))
                 .coerceIn(0f, 1f)
-            val layerBenefit = selected.hiddenDepth.coerceAtMost(4) * 0.45f
-            total += near.coerceAtMost(8) / 8f + centrality * 0.35f + layerBenefit
+            total += near.coerceAtMost(8) / 8f + centrality * 0.35f
         }
         return if (count == 0) 0f else total / count
     }
 
-    private fun updateLayerMemory(features: List<Feature>) {
-        frameNumber++
-        val board = features.filter { it.region == 0 }
-
-        // Several nearly empty frames indicate a new round or the end of one.
-        nearlyEmptyFrames = if (board.size <= 2) nearlyEmptyFrames + 1 else 0
-        if (nearlyEmptyFrames >= 5) {
-            layerMemory.clear()
-            nearlyEmptyFrames = 0
-        }
-
-        board.forEach { candidate ->
-            val same = layerMemory.firstOrNull { remembered ->
-                overlap(remembered.bounds, candidate.bounds) > 0.68f &&
-                    distance(remembered.signature, candidate.signature) < 0.32f
-            }
-            if (same != null) {
-                same.bounds = RectF(candidate.bounds)
-                same.lastSeenFrame = frameNumber
-            } else {
-                layerMemory += RememberedFeature(
-                    bounds = RectF(candidate.bounds),
-                    signature = candidate.signature.copyOf(),
-                    lastSeenFrame = frameNumber
-                )
-            }
-        }
-
-        // A current tile can cover remembered tiles at the same or a nearby
-        // position. This depth estimate lets the planner prefer moves that
-        // uncover more of the board without ever tapping a hidden tile.
-        board.forEach { visible ->
-            visible.hiddenDepth = layerMemory.count { remembered ->
-                overlap(remembered.bounds, visible.bounds) > 0.20f &&
-                    distance(remembered.signature, visible.signature) > 0.24f
-            }
-        }
-
-        if (layerMemory.size > 180) {
-            layerMemory.sortByDescending { it.lastSeenFrame }
-            layerMemory.subList(180, layerMemory.size).clear()
-        }
-    }
-
     private fun distance(a: FloatArray, b: FloatArray): Float {
-        // Thin and pale symbols (skewer, cotton, milk and cutlery) move by a few
-        // sampled pixels when tile bounds change. Compare wider alignments and
-        // ignore the border, which is where neighbouring tiles cause noise.
+        // Tile bounds can differ by a few pixels when a neighbour partially
+        // covers an edge. Compare nine tiny alignments and keep the best one.
         val side = 20
         val channels = 3
         var best = Float.MAX_VALUE
-        for (shiftY in -2..2) {
-            for (shiftX in -2..2) {
+        for (shiftY in -1..1) {
+            for (shiftX in -1..1) {
                 var sum = 0f
                 var count = 0
-                for (y in 2 until side - 2) {
+                for (y in 0 until side) {
                     val otherY = y + shiftY
                     if (otherY !in 0 until side) continue
-                    for (x in 2 until side - 2) {
+                    for (x in 0 until side) {
                         val otherX = x + shiftX
                         if (otherX !in 0 until side) continue
                         val first = (y * side + x) * channels
@@ -302,7 +172,7 @@ class TileRecognizer {
                     }
                 }
                 if (count > 0) {
-                    val shiftPenalty = (abs(shiftX) + abs(shiftY)) * 0.008f
+                    val shiftPenalty = (abs(shiftX) + abs(shiftY)) * 0.012f
                     best = minOf(best, sqrt(sum / count) + shiftPenalty)
                 }
             }
@@ -427,8 +297,5 @@ class TileRecognizer {
         val area = intersection.width() * intersection.height()
         val smaller = minOf(a.width() * a.height(), b.width() * b.height())
         return if (smaller <= 0f) 0f else area / smaller
-    }
-    companion object {
-        private const val ORDER_MATCH_THRESHOLD = 0.72f
     }
 }
