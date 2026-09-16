@@ -276,19 +276,20 @@ class TileRecognizer {
     }
 
     private fun distance(a: FloatArray, b: FloatArray): Float {
-        // Tile bounds can differ by a few pixels when a neighbour partially
-        // covers an edge. Compare nine tiny alignments and keep the best one.
+        // Thin and pale symbols (skewer, cotton, milk and cutlery) move by a few
+        // sampled pixels when tile bounds change. Compare wider alignments and
+        // ignore the border, which is where neighbouring tiles cause noise.
         val side = 20
         val channels = 3
         var best = Float.MAX_VALUE
-        for (shiftY in -1..1) {
-            for (shiftX in -1..1) {
+        for (shiftY in -2..2) {
+            for (shiftX in -2..2) {
                 var sum = 0f
                 var count = 0
-                for (y in 0 until side) {
+                for (y in 2 until side - 2) {
                     val otherY = y + shiftY
                     if (otherY !in 0 until side) continue
-                    for (x in 0 until side) {
+                    for (x in 2 until side - 2) {
                         val otherX = x + shiftX
                         if (otherX !in 0 until side) continue
                         val first = (y * side + x) * channels
@@ -301,7 +302,7 @@ class TileRecognizer {
                     }
                 }
                 if (count > 0) {
-                    val shiftPenalty = (abs(shiftX) + abs(shiftY)) * 0.012f
+                    val shiftPenalty = (abs(shiftX) + abs(shiftY)) * 0.008f
                     best = minOf(best, sqrt(sum / count) + shiftPenalty)
                 }
             }
