@@ -25,6 +25,7 @@ import it.trisassist.accessibility.TrisAccessibilityService
 import it.trisassist.overlay.OverlayService
 import it.trisassist.vision.GamePhase
 import it.trisassist.vision.GameState
+import it.trisassist.vision.ItemKind
 import it.trisassist.vision.MovePlanner
 import it.trisassist.vision.TileRecognizer
 
@@ -39,6 +40,11 @@ class CaptureService : Service() {
     private var executing = false
     private var executionCooldownUntil = 0L
     private var lastAnalysis = 0L
+    private var adaptivePoints = mutableListOf<PointF>()
+    private var adaptiveKind: ItemKind? = null
+    private var lastTappedPoint: PointF? = null
+    private var tapCompletedAt = 0L
+    private var waitingForBoardChange = false
     private val recognizer by lazy { TileRecognizer() }
     private val planner = MovePlanner()
 
@@ -153,6 +159,11 @@ class CaptureService : Service() {
             publicStorageUnlocked = false,
             phase = GamePhase.PLAYING
         )
+        if (executing) {
+            continueAdaptiveSequence(frame.boardTiles)
+            return
+        }
+
         val suggestion = planner.suggest(state)
         when {
             frame.boardTiles.isEmpty() -> {
@@ -177,16 +188,59 @@ class CaptureService : Service() {
                         return
                     }
                     oneTripleArmed = false
-                    executing = true
-                    publishControlState()
-                    val started = TrisAccessibilityService.performOneTriple(points) {
-                        executing = false
-                        executionCooldownUntil = System.currentTimeMillis() + 220L
-                    }
-                    if (!started) executing = false
+                    startAdaptiveSequence(points, suggestion.kind)
                 }
             }
         }
+    }
+
+    private fun startAdaptiveSequence(points: List<PointF>, kind: ItemKind) {
+        adaptivePoints = points.take(3).toMutableList()
+        adaptiveKind = kind
+        executing = true
+        waitingForBoardChange = false
+        publishControlState()
+        tapNextAdaptive()
+    }
+
+    private fun tapNextAdaptive() {
+        val point = adaptivePoints.removeFirstOrNull()
+        if (point == null) {
+            finishAdaptiveSequence()
+            return
+        }
+        lastTappedPoint = point
+        val started = TrisAccessibilityService.performTap(point) {
+            tapCompletedAt = System.currentTimeMillis()
+            waitingForBoardChange = true
+        }
+        if (!started) finishAdaptiveSequence()
+    }
+
+    private fun continueAdaptiveSequence(tiles: List<it.trisassist.vision.TileDetection>) {
+        if (!waitingForBoardChange) return
+        val point = lastTappedPoint ?: return finishAdaptiveSequence()
+        val kind = adaptiveKind ?: return finishAdaptiveSequence()
+        val sameTileStillVisible = tiles.any { tile ->
+            tile.kind == kind &&
+                kotlin.math.abs(tile.bounds.centerX() - point.x) <= tile.bounds.width() * 0.24f &&
+                kotlin.math.abs(tile.bounds.centerY() - point.y) <= tile.bounds.height() * 0.24f
+        }
+        val timedOut = System.currentTimeMillis() - tapCompletedAt >= 420L
+        if (!sameTileStillVisible || timedOut) {
+            waitingForBoardChange = false
+            tapNextAdaptive()
+        }
+    }
+
+    private fun finishAdaptiveSequence() {
+        adaptivePoints.clear()
+        adaptiveKind = null
+        lastTappedPoint = null
+        waitingForBoardChange = false
+        executing = false
+        executionCooldownUntil = System.currentTimeMillis() + 120L
+        publishControlState()
     }
 
     private fun isInsidePublicStorage(point: PointF, bitmap: Bitmap): Boolean {
@@ -248,6 +302,10 @@ class CaptureService : Service() {
         oneTripleArmed = false
         autoMode = false
         executing = false
+        adaptivePoints.clear()
+        adaptiveKind = null
+        lastTappedPoint = null
+        waitingForBoardChange = false
         stopService(Intent(this, OverlayService::class.java))
         reader?.setOnImageAvailableListener(null, null)
         display?.release()
