@@ -46,6 +46,12 @@ class TrisAccessibilityService : AccessibilityService() {
     companion object {
         @Volatile private var instance: TrisAccessibilityService? = null
         fun isReady(): Boolean = instance != null
+        fun performTap(point: PointF, finished: () -> Unit): Boolean {
+            val service = instance ?: return false
+            service.handler.post { service.tapSequence(listOf(point), finished = finished) }
+            return true
+        }
+
         fun performOneTriple(points: List<PointF>, finished: () -> Unit): Boolean {
             val service = instance ?: return false
             service.handler.post { service.tapSequence(points.take(3), finished = finished) }
