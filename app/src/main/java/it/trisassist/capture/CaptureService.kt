@@ -45,6 +45,10 @@ class CaptureService : Service() {
     private var lastTappedPoint: PointF? = null
     private var tapCompletedAt = 0L
     private var waitingForBoardChange = false
+    private var trayGuardActive = false
+    private var trayGuardStartedAt = 0L
+    private var lastTraySignature = ""
+    private var trayStableFrames = 0
     private val recognizer by lazy { TileRecognizer() }
     private val planner = MovePlanner()
 
@@ -80,6 +84,9 @@ class CaptureService : Service() {
         oneTripleArmed = false
         autoMode = false
         executing = false
+        trayGuardActive = false
+        lastTraySignature = ""
+        trayStableFrames = 0
         startForeground(
             NOTIFICATION_ID,
             NotificationCompat.Builder(this, CHANNEL_ID)
@@ -159,6 +166,7 @@ class CaptureService : Service() {
             publicStorageUnlocked = false,
             phase = GamePhase.PLAYING
         )
+        updateTrayGuard(frame.tray)
         if (executing) {
             continueAdaptiveSequence(frame.boardTiles)
             return
@@ -176,7 +184,8 @@ class CaptureService : Service() {
             }
             else -> {
                 publish(suggestion.taps.map { it.bounds }, "Tris trovato")
-                val mayExecute = System.currentTimeMillis() >= executionCooldownUntil
+                val mayExecute = !trayGuardActive &&
+                    System.currentTimeMillis() >= executionCooldownUntil
                 if ((oneTripleArmed || autoMode) && !executing && mayExecute) {
                     val points = suggestion.taps.take(3).map {
                         PointF(it.bounds.centerX(), it.bounds.centerY())
@@ -240,7 +249,26 @@ class CaptureService : Service() {
         waitingForBoardChange = false
         executing = false
         executionCooldownUntil = System.currentTimeMillis() + 120L
+        trayGuardActive = true
+        trayGuardStartedAt = System.currentTimeMillis()
+        lastTraySignature = ""
+        trayStableFrames = 0
         publishControlState()
+    }
+
+    private fun updateTrayGuard(tray: List<ItemKind>) {
+        if (!trayGuardActive) return
+        val signature = tray.joinToString(",") { it.name }
+        if (signature == lastTraySignature) {
+            trayStableFrames++
+        } else {
+            lastTraySignature = signature
+            trayStableFrames = 1
+        }
+        val elapsed = System.currentTimeMillis() - trayGuardStartedAt
+        if ((trayStableFrames >= 2 && elapsed >= 180L) || elapsed >= 900L) {
+            trayGuardActive = false
+        }
     }
 
     private fun isInsidePublicStorage(point: PointF, bitmap: Bitmap): Boolean {
@@ -306,6 +334,9 @@ class CaptureService : Service() {
         adaptiveKind = null
         lastTappedPoint = null
         waitingForBoardChange = false
+        trayGuardActive = false
+        lastTraySignature = ""
+        trayStableFrames = 0
         stopService(Intent(this, OverlayService::class.java))
         reader?.setOnImageAvailableListener(null, null)
         display?.release()
