@@ -49,6 +49,11 @@ class CaptureService : Service() {
     private var trayGuardStartedAt = 0L
     private var lastTraySignature = ""
     private var trayStableFrames = 0
+    private var alpacaAnimationSeen = false
+    private var alpacaAdviceUntil = 0L
+    private var alpacaAdviceKind: ItemKind? = null
+    private var adaptiveExecutedCount = 0
+    private val removedCounts = mutableMapOf<ItemKind, Int>()
     private val recognizer by lazy { TileRecognizer() }
     private val planner = MovePlanner()
 
@@ -87,6 +92,11 @@ class CaptureService : Service() {
         trayGuardActive = false
         lastTraySignature = ""
         trayStableFrames = 0
+        alpacaAnimationSeen = false
+        alpacaAdviceUntil = 0L
+        alpacaAdviceKind = null
+        adaptiveExecutedCount = 0
+        removedCounts.clear()
         startForeground(
             NOTIFICATION_ID,
             NotificationCompat.Builder(this, CHANNEL_ID)
@@ -157,6 +167,19 @@ class CaptureService : Service() {
     }
 
     private fun analyze(bitmap: Bitmap) {
+        if (isAlpacaFrame(bitmap)) {
+            if (!alpacaAnimationSeen) {
+                alpacaAnimationSeen = true
+                alpacaAdviceUntil = 0L
+                alpacaAdviceKind = null
+                autoMode = false
+                oneTripleArmed = false
+                publishControlState()
+            }
+            publish(emptyList(), "Alpache in arrivo")
+            return
+        }
+
         val frame = recognizer.recognize(bitmap)
         val state = GameState(
             tiles = frame.boardTiles,
@@ -167,6 +190,31 @@ class CaptureService : Service() {
             phase = GamePhase.PLAYING
         )
         updateTrayGuard(frame.tray)
+
+        if (alpacaAnimationSeen) {
+            val recommendation = chooseAlpacaRemoval(state)
+            if (recommendation != null) {
+                alpacaAdviceKind = recommendation.kind
+                alpacaAdviceUntil = System.currentTimeMillis() + 3500L
+                alpacaAnimationSeen = false
+            } else {
+                publish(emptyList(), "Cerco oggetto da togliere…")
+                return
+            }
+        }
+        if (System.currentTimeMillis() < alpacaAdviceUntil) {
+            val recommended = frame.boardTiles
+                .filter { it.selectable && it.kind == alpacaAdviceKind }
+                .maxByOrNull { it.confidence }
+            if (recommended != null) {
+                publish(listOf(recommended.bounds), "TOGLI: ${recommended.kind.label.uppercase()}")
+            } else {
+                val label = alpacaAdviceKind?.label?.uppercase() ?: "OGGETTO"
+                publish(emptyList(), "TOGLI: $label")
+            }
+            return
+        }
+
         if (executing) {
             continueAdaptiveSequence(frame.boardTiles)
             return
@@ -205,6 +253,7 @@ class CaptureService : Service() {
 
     private fun startAdaptiveSequence(points: List<PointF>, kind: ItemKind) {
         adaptivePoints = points.take(3).toMutableList()
+        adaptiveExecutedCount = adaptivePoints.size
         adaptiveKind = kind
         executing = true
         waitingForBoardChange = false
@@ -243,6 +292,10 @@ class CaptureService : Service() {
     }
 
     private fun finishAdaptiveSequence() {
+        adaptiveKind?.let { kind ->
+            removedCounts[kind] = (removedCounts[kind] ?: 0) + adaptiveExecutedCount
+        }
+        adaptiveExecutedCount = 0
         adaptivePoints.clear()
         adaptiveKind = null
         lastTappedPoint = null
@@ -269,6 +322,45 @@ class CaptureService : Service() {
         if ((trayStableFrames >= 2 && elapsed >= 180L) || elapsed >= 900L) {
             trayGuardActive = false
         }
+    }
+
+    private fun chooseAlpacaRemoval(state: GameState): it.trisassist.vision.TileDetection? {
+        val selectable = state.tiles.filter {
+            it.selectable && it.kind != ItemKind.UNKNOWN && it.kind != ItemKind.GEM
+        }
+        return selectable
+            .groupBy { it.kind }
+            .filterKeys { it != state.order }
+            .maxByOrNull { (kind, foreground) ->
+                val totalVisible = state.tiles.count { it.kind == kind }
+                val deeper = state.tiles.count { it.kind == kind && it.estimatedLayer > 0 }
+                totalVisible * 12 + deeper * 5 + foreground.size * 4 -
+                    (removedCounts[kind] ?: 0)
+            }
+            ?.value
+            ?.maxByOrNull { it.confidence }
+    }
+
+    private fun isAlpacaFrame(bitmap: Bitmap): Boolean {
+        var white = 0
+        var sampled = 0
+        val startY = (bitmap.height * 0.18f).toInt()
+        val endY = (bitmap.height * 0.76f).toInt()
+        var y = startY
+        while (y < endY) {
+            var x = 0
+            while (x < bitmap.width) {
+                val color = bitmap.getPixel(x, y)
+                val r = android.graphics.Color.red(color)
+                val g = android.graphics.Color.green(color)
+                val b = android.graphics.Color.blue(color)
+                if (r >= 246 && g >= 246 && b >= 246) white++
+                sampled++
+                x += 12
+            }
+            y += 12
+        }
+        return sampled > 0 && white.toFloat() / sampled >= 0.10f
     }
 
     private fun isInsidePublicStorage(point: PointF, bitmap: Bitmap): Boolean {
@@ -337,6 +429,11 @@ class CaptureService : Service() {
         trayGuardActive = false
         lastTraySignature = ""
         trayStableFrames = 0
+        alpacaAnimationSeen = false
+        alpacaAdviceUntil = 0L
+        alpacaAdviceKind = null
+        adaptiveExecutedCount = 0
+        removedCounts.clear()
         stopService(Intent(this, OverlayService::class.java))
         reader?.setOnImageAvailableListener(null, null)
         display?.release()
