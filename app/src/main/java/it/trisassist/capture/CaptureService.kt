@@ -37,6 +37,7 @@ class CaptureService : Service() {
     private var stopping = false
     private var oneTripleArmed = false
     private var autoMode = false
+    private var autoPlusMode = false
     private var executing = false
     private var executionCooldownUntil = 0L
     private var lastAnalysis = 0L
@@ -76,6 +77,15 @@ class CaptureService : Service() {
             ACTION_AUTO -> {
                 if (!executing) {
                     autoMode = !autoMode
+                    autoPlusMode = false
+                    oneTripleArmed = false
+                    publishControlState()
+                }
+            }
+            ACTION_AUTO_PLUS -> {
+                if (!executing) {
+                    autoPlusMode = !autoPlusMode
+                    autoMode = false
                     oneTripleArmed = false
                     publishControlState()
                 }
@@ -88,6 +98,7 @@ class CaptureService : Service() {
         stopping = false
         oneTripleArmed = false
         autoMode = false
+        autoPlusMode = false
         executing = false
         trayGuardActive = false
         lastTraySignature = ""
@@ -173,6 +184,7 @@ class CaptureService : Service() {
                 alpacaAdviceUntil = 0L
                 alpacaAdviceKind = null
                 autoMode = false
+                autoPlusMode = false
                 oneTripleArmed = false
                 publishControlState()
             }
@@ -220,7 +232,11 @@ class CaptureService : Service() {
             return
         }
 
-        val suggestion = planner.suggest(state)
+        val safeSuggestion = planner.suggest(state)
+        val digSuggestion = if (safeSuggestion == null && autoPlusMode) {
+            planner.suggestDig(state)
+        } else null
+        val suggestion = safeSuggestion ?: digSuggestion
         when {
             frame.boardTiles.isEmpty() -> {
                 publish(emptyList(), "Cerco tessere…")
@@ -231,16 +247,22 @@ class CaptureService : Service() {
                 registerAutoMiss()
             }
             else -> {
-                publish(suggestion.taps.map { it.bounds }, "Tris trovato")
+                val isDig = safeSuggestion == null && digSuggestion != null
+                publish(
+                    suggestion.taps.map { it.bounds },
+                    if (isDig) "Libero lo strato" else "Tris trovato"
+                )
                 val mayExecute = !trayGuardActive &&
                     System.currentTimeMillis() >= executionCooldownUntil
-                if ((oneTripleArmed || autoMode) && !executing && mayExecute) {
+                if ((oneTripleArmed || autoMode || autoPlusMode) && !executing && mayExecute) {
                     val points = suggestion.taps.take(3).map {
                         PointF(it.bounds.centerX(), it.bounds.centerY())
                     }
                     // Defence in depth: even if vision misclassifies the blue
                     // team storage, AUTO refuses every point inside that area.
-                    if (autoMode && points.any { isInsidePublicStorage(it, bitmap) }) {
+                    if ((autoMode || autoPlusMode) &&
+                        points.any { isInsidePublicStorage(it, bitmap) }
+                    ) {
                         publish(emptyList(), "Magazzino pubblico protetto")
                         return
                     }
@@ -393,6 +415,7 @@ class CaptureService : Service() {
                 .setPackage(packageName)
                 .putExtra(OverlayService.EXTRA_ARMED, oneTripleArmed)
                 .putExtra(OverlayService.EXTRA_AUTO, autoMode)
+                .putExtra(OverlayService.EXTRA_AUTO_PLUS, autoPlusMode)
                 .putExtra(
                     OverlayService.EXTRA_ACCESSIBILITY_READY,
                     TrisAccessibilityService.isReady()
@@ -421,6 +444,7 @@ class CaptureService : Service() {
         stopping = true
         oneTripleArmed = false
         autoMode = false
+        autoPlusMode = false
         executing = false
         adaptivePoints.clear()
         adaptiveKind = null
@@ -468,6 +492,7 @@ class CaptureService : Service() {
         const val ACTION_STOP = "it.trisassist.STOP"
         const val ACTION_ONE_TRIPLE = "it.trisassist.ONE_TRIPLE"
         const val ACTION_AUTO = "it.trisassist.AUTO"
+        const val ACTION_AUTO_PLUS = "it.trisassist.AUTO_PLUS"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
         private const val CHANNEL_ID = "capture"
