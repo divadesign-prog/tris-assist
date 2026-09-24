@@ -28,6 +28,7 @@ class OverlayService : Service() {
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var armed = false
     private var autoMode = false
+    private var autoPlusMode = false
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -44,6 +45,7 @@ class OverlayService : Service() {
                 ACTION_CONTROL_STATE -> {
                     armed = intent.getBooleanExtra(EXTRA_ARMED, false)
                     autoMode = intent.getBooleanExtra(EXTRA_AUTO, false)
+                    autoPlusMode = intent.getBooleanExtra(EXTRA_AUTO_PLUS, false)
                     updateBubble()
                 }
             }
@@ -142,7 +144,11 @@ class OverlayService : Service() {
                     val moved = abs(event.rawX - downRawX) + abs(event.rawY - downRawY)
                     val held = event.eventTime - event.downTime
                     if (moved < 14f * resources.displayMetrics.density) {
-                        if (held >= 650L) onBubbleLongPress() else onBubbleTap()
+                        when {
+                            held >= 1600L -> onBubbleExtraLongPress()
+                            held >= 650L -> onBubbleLongPress()
+                            else -> onBubbleTap()
+                        }
                     }
                     getSharedPreferences("overlay", MODE_PRIVATE)
                         .edit().putInt("bubble_y", params.y).apply()
@@ -177,10 +183,27 @@ class OverlayService : Service() {
         })
     }
 
+    private fun onBubbleExtraLongPress() {
+        if (!TrisAccessibilityService.isReady()) {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+            return
+        }
+        startService(Intent(this, CaptureService::class.java).apply {
+            action = CaptureService.ACTION_AUTO_PLUS
+        })
+    }
+
     private fun updateBubble() {
-        bubble?.text = if (autoMode) "AUTO" else "1×"
-        bubble?.textSize = if (autoMode) 10f else 15f
+        bubble?.text = when {
+            autoPlusMode -> "AUTO+"
+            autoMode -> "AUTO"
+            else -> "1×"
+        }
+        bubble?.textSize = if (autoMode || autoPlusMode) 10f else 15f
         val fill = when {
+            autoPlusMode -> Color.rgb(132, 74, 190)
             autoMode -> Color.rgb(31, 190, 72)
             armed -> Color.rgb(238, 160, 35)
             else -> Color.argb(205, 55, 62, 68)
@@ -211,6 +234,7 @@ class OverlayService : Service() {
         const val EXTRA_MESSAGE = "message"
         const val EXTRA_ARMED = "armed"
         const val EXTRA_AUTO = "auto"
+        const val EXTRA_AUTO_PLUS = "autoPlus"
         const val EXTRA_ACCESSIBILITY_READY = "accessibilityReady"
     }
 }
