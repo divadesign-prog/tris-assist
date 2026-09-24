@@ -44,6 +44,7 @@ class CaptureService : Service() {
     private var adaptivePoints = mutableListOf<PointF>()
     private var adaptiveKind: ItemKind? = null
     private var lastTappedPoint: PointF? = null
+    private var tapRequestedAt = 0L
     private var tapCompletedAt = 0L
     private var waitingForBoardChange = false
     private var trayGuardActive = false
@@ -290,15 +291,25 @@ class CaptureService : Service() {
             return
         }
         lastTappedPoint = point
+        tapRequestedAt = System.currentTimeMillis()
         val started = TrisAccessibilityService.performTap(point) {
-            tapCompletedAt = System.currentTimeMillis()
-            waitingForBoardChange = true
+            if (executing) {
+                tapCompletedAt = System.currentTimeMillis()
+                waitingForBoardChange = true
+            }
         }
         if (!started) finishAdaptiveSequence()
     }
 
     private fun continueAdaptiveSequence(tiles: List<it.trisassist.vision.TileDetection>) {
-        if (!waitingForBoardChange) return
+        if (!waitingForBoardChange) {
+            // Some Samsung/Android versions occasionally accept a gesture but
+            // omit its completion callback. Never leave AUTO blocked forever.
+            if (System.currentTimeMillis() - tapRequestedAt >= 600L) {
+                finishAdaptiveSequence()
+            }
+            return
+        }
         val point = lastTappedPoint ?: return finishAdaptiveSequence()
         val kind = adaptiveKind ?: return finishAdaptiveSequence()
         val sameTileStillVisible = tiles.any { tile ->
@@ -321,6 +332,7 @@ class CaptureService : Service() {
         adaptivePoints.clear()
         adaptiveKind = null
         lastTappedPoint = null
+        tapRequestedAt = 0L
         waitingForBoardChange = false
         executing = false
         executionCooldownUntil = System.currentTimeMillis() + 120L
