@@ -173,7 +173,24 @@ class CaptureService : Service() {
         }
 
         val suggestion = planner.suggest(state)
+        val layerHint = frame.layerHint?.takeIf {
+            autoMode && frame.tray.size <= 3 && it.confidence >= 0.80f
+        }
         when {
+            suggestion == null && layerHint != null -> {
+                publish(listOf(layerHint.blockerBounds), "Libero uno strato memorizzato")
+                val mayExecute = !trayGuardActive &&
+                    System.currentTimeMillis() >= executionCooldownUntil
+                val point = PointF(
+                    layerHint.blockerBounds.centerX(),
+                    layerHint.blockerBounds.centerY()
+                )
+                if (autoMode && !executing && mayExecute &&
+                    !isInsidePublicStorage(point, bitmap)
+                ) {
+                    startAdaptiveSequence(listOf(point), ItemKind.UNKNOWN)
+                }
+            }
             frame.boardTiles.isEmpty() -> {
                 publish(emptyList(), "Cerco tessere…")
                 registerAutoMiss()
