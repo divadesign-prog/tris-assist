@@ -6,13 +6,29 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
 
+data class LayerHint(
+    val blockerBounds: RectF,
+    val confidence: Float
+)
+
 data class RecognizedFrame(
     val boardTiles: List<TileDetection>,
     val tray: List<ItemKind>,
-    val order: ItemKind?
+    val order: ItemKind?,
+    val layerHint: LayerHint? = null
 )
 
 class TileRecognizer {
+    private data class MemoryTile(
+        var bounds: RectF,
+        val signature: FloatArray,
+        var seenFrames: Int,
+        var lastSeenFrame: Int
+    )
+    private val layerMemory = mutableListOf<MemoryTile>()
+    private var memoryFrame = 0
+    private var emptyBoardFrames = 0
+
     private data class Feature(val bounds: RectF, val signature: FloatArray, val region: Int)
     private data class Triplet(
         val indices: IntArray,
@@ -39,6 +55,8 @@ class TileRecognizer {
             if (region < 0) null else Feature(bounds, signature(source, bounds), region)
         }
 
+        val boardFeatures = features.filter { it.region == 0 }
+        val layerHint = updateLayerMemory(boardFeatures)
         val triplet = findBestTriplet(features, source.width.toFloat())
         val chosen = triplet?.indices?.toSet().orEmpty()
         val board = features.mapIndexedNotNull { index, feature ->
@@ -58,7 +76,93 @@ class TileRecognizer {
             else fillers[(fillerIndex++ - 1) % fillers.size]
         }
 
-        return RecognizedFrame(boardTiles = board, tray = tray, order = null)
+        return RecognizedFrame(
+            boardTiles = board,
+            tray = tray,
+            order = null,
+            layerHint = layerHint
+        )
+    }
+
+    private fun updateLayerMemory(current: List<Feature>): LayerHint? {
+        memoryFrame++
+        if (current.isEmpty()) {
+            emptyBoardFrames++
+            if (emptyBoardFrames >= 8) layerMemory.clear()
+            return null
+        }
+        emptyBoardFrames = 0
+
+        current.forEach { feature ->
+            val width = feature.bounds.width().coerceAtLeast(1f)
+            val match = layerMemory
+                .filter { remembered ->
+                    abs(remembered.bounds.centerX() - feature.bounds.centerX()) <= width * 0.30f &&
+                        abs(remembered.bounds.centerY() - feature.bounds.centerY()) <= width * 0.30f &&
+                        distance(remembered.signature, feature.signature) <= 0.36f
+                }
+                .minByOrNull { distance(it.signature, feature.signature) }
+            if (match != null) {
+                match.bounds = RectF(feature.bounds)
+                match.seenFrames++
+                match.lastSeenFrame = memoryFrame
+            } else {
+                layerMemory += MemoryTile(
+                    bounds = RectF(feature.bounds),
+                    signature = feature.signature.copyOf(),
+                    seenFrames = 1,
+                    lastSeenFrame = memoryFrame
+                )
+            }
+        }
+        if (layerMemory.size > 140) {
+            layerMemory.removeAll { memoryFrame - it.lastSeenFrame > 180 }
+        }
+
+        val hidden = layerMemory.filter { remembered ->
+            remembered.seenFrames >= 2 &&
+                memoryFrame - remembered.lastSeenFrame >= 2 &&
+                current.any { overlap(it.bounds, remembered.bounds) >= 0.12f }
+        }
+        if (hidden.size < 3) return null
+
+        val unused = hidden.toMutableList()
+        val groups = mutableListOf<List<MemoryTile>>()
+        while (unused.isNotEmpty()) {
+            val seed = unused.removeAt(0)
+            val group = mutableListOf(seed)
+            val iterator = unused.iterator()
+            while (iterator.hasNext()) {
+                val candidate = iterator.next()
+                if (distance(seed.signature, candidate.signature) <= 0.34f &&
+                    group.none { overlap(it.bounds, candidate.bounds) > 0.55f }
+                ) {
+                    group += candidate
+                    iterator.remove()
+                }
+            }
+            if (group.size >= 3) groups += group
+        }
+
+        val bestGroup = groups.maxByOrNull { group ->
+            group.sumOf { hiddenTile ->
+                current.count { overlap(it.bounds, hiddenTile.bounds) >= 0.12f }
+            }
+        } ?: return null
+
+        val blocker = current.maxByOrNull { visible ->
+            bestGroup.sumOf { hiddenTile ->
+                (overlap(visible.bounds, hiddenTile.bounds) * 1000f).toInt()
+            }
+        } ?: return null
+        val coveredMatches = bestGroup.count {
+            overlap(blocker.bounds, it.bounds) >= 0.12f
+        }
+        if (coveredMatches == 0) return null
+        return LayerHint(
+            blockerBounds = RectF(blocker.bounds),
+            confidence = (0.72f + coveredMatches * 0.07f).coerceAtMost(0.93f)
+        )
     }
 
     private fun findBestTriplet(features: List<Feature>, screenWidth: Float): Triplet? {
