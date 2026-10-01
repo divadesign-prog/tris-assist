@@ -99,7 +99,7 @@ class TileRecognizer {
                 .filter { remembered ->
                     abs(remembered.bounds.centerX() - feature.bounds.centerX()) <= width * 0.30f &&
                         abs(remembered.bounds.centerY() - feature.bounds.centerY()) <= width * 0.30f &&
-                        distance(remembered.signature, feature.signature) <= 0.36f
+                        distance(remembered.signature, feature.signature) <= 0.32f
                 }
                 .minByOrNull { distance(it.signature, feature.signature) }
             if (match != null) {
@@ -120,7 +120,7 @@ class TileRecognizer {
         }
 
         val hidden = layerMemory.filter { remembered ->
-            remembered.seenFrames >= 2 &&
+            remembered.seenFrames >= 3 &&
                 memoryFrame - remembered.lastSeenFrame >= 2 &&
                 current.any { overlap(it.bounds, remembered.bounds) >= 0.12f }
         }
@@ -134,7 +134,7 @@ class TileRecognizer {
             val iterator = unused.iterator()
             while (iterator.hasNext()) {
                 val candidate = iterator.next()
-                if (distance(seed.signature, candidate.signature) <= 0.34f &&
+                if (distance(seed.signature, candidate.signature) <= 0.30f &&
                     group.none { overlap(it.bounds, candidate.bounds) > 0.55f }
                 ) {
                     group += candidate
@@ -194,7 +194,7 @@ class TileRecognizer {
                     val averageScore = (distanceAB + distanceAC + distanceBC) / 3f
                     // Accept small changes in crop/lighting (especially milk, meat,
                     // gloves and diamonds), but still require all three matches.
-                    if (visualScore > 0.60f || averageScore > 0.52f) continue
+                    if (visualScore > 0.56f || averageScore > 0.48f) continue
 
                     val candidate = Triplet(
                         indices = indices,
@@ -285,8 +285,8 @@ class TileRecognizer {
     }
 
     private fun signature(source: Bitmap, bounds: RectF): FloatArray {
-        val insetX = bounds.width() * 0.08f
-        val insetY = bounds.height() * 0.08f
+        val insetX = bounds.width() * 0.12f
+        val insetY = bounds.height() * 0.12f
         val left = (bounds.left + insetX).toInt().coerceIn(0, source.width - 1)
         val top = (bounds.top + insetY).toInt().coerceIn(0, source.height - 1)
         val right = (bounds.right - insetX).toInt().coerceIn(left + 1, source.width)
