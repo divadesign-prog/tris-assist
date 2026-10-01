@@ -127,7 +127,7 @@ class CaptureService : Service() {
         reader?.setOnImageAvailableListener({ source ->
             val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
             val now = System.currentTimeMillis()
-            if (now - lastAnalysis < 80L) {
+            if (now - lastAnalysis < 65L) {
                 image.close()
                 return@setOnImageAvailableListener
             }
@@ -252,7 +252,7 @@ class CaptureService : Service() {
                 kotlin.math.abs(tile.bounds.centerX() - point.x) <= tile.bounds.width() * 0.24f &&
                 kotlin.math.abs(tile.bounds.centerY() - point.y) <= tile.bounds.height() * 0.24f
         }
-        val timedOut = System.currentTimeMillis() - tapCompletedAt >= 220L
+        val timedOut = System.currentTimeMillis() - tapCompletedAt >= 180L
         if (!sameTileStillVisible || timedOut) {
             waitingForBoardChange = false
             tapNextAdaptive()
@@ -265,7 +265,7 @@ class CaptureService : Service() {
         lastTappedPoint = null
         waitingForBoardChange = false
         executing = false
-        executionCooldownUntil = System.currentTimeMillis() + 35L
+        executionCooldownUntil = System.currentTimeMillis() + 25L
         trayGuardActive = true
         trayGuardStartedAt = System.currentTimeMillis()
         lastTraySignature = ""
@@ -283,7 +283,7 @@ class CaptureService : Service() {
             trayStableFrames = 1
         }
         val elapsed = System.currentTimeMillis() - trayGuardStartedAt
-        if ((trayStableFrames >= 2 && elapsed >= 80L) || elapsed >= 500L) {
+        if ((trayStableFrames >= 2 && elapsed >= 60L) || elapsed >= 400L) {
             trayGuardActive = false
         }
     }
