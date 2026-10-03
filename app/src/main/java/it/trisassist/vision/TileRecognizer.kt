@@ -15,7 +15,8 @@ data class RecognizedFrame(
     val boardTiles: List<TileDetection>,
     val tray: List<ItemKind>,
     val order: ItemKind?,
-    val layerHint: LayerHint? = null
+    val layerHint: LayerHint? = null,
+    val boardLayout: Set<String> = emptySet()
 )
 
 class TileRecognizer {
@@ -28,6 +29,12 @@ class TileRecognizer {
     private val layerMemory = mutableListOf<MemoryTile>()
     private var memoryFrame = 0
     private var emptyBoardFrames = 0
+
+    fun resetLayerMemory() {
+        layerMemory.clear()
+        memoryFrame = 0
+        emptyBoardFrames = 0
+    }
 
     private data class Feature(val bounds: RectF, val signature: FloatArray, val region: Int)
     private data class Triplet(
@@ -80,7 +87,12 @@ class TileRecognizer {
             boardTiles = board,
             tray = tray,
             order = null,
-            layerHint = layerHint
+            layerHint = layerHint,
+            boardLayout = boardFeatures.map { feature ->
+                val x = (feature.bounds.centerX() / source.width * 24f).toInt()
+                val y = (feature.bounds.centerY() / source.height * 40f).toInt()
+                "$x:$y"
+            }.toSet()
         )
     }
 
