@@ -49,9 +49,6 @@ class CaptureService : Service() {
     private var trayGuardStartedAt = 0L
     private var lastTraySignature = ""
     private var trayStableFrames = 0
-    private var lastBoardLayout: Set<String> = emptySet()
-    private var boardStableFrames = 0
-    private var shuffleRecoveryUntil = 0L
     private val recognizer by lazy { TileRecognizer() }
     private val planner = MovePlanner()
 
@@ -90,10 +87,6 @@ class CaptureService : Service() {
         trayGuardActive = false
         lastTraySignature = ""
         trayStableFrames = 0
-        lastBoardLayout = emptySet()
-        boardStableFrames = 0
-        shuffleRecoveryUntil = 0L
-        recognizer.resetLayerMemory()
         startForeground(
             NOTIFICATION_ID,
             NotificationCompat.Builder(this, CHANNEL_ID)
@@ -174,24 +167,6 @@ class CaptureService : Service() {
             phase = GamePhase.PLAYING
         )
         updateTrayGuard(frame.tray)
-        if (detectBoardShuffle(frame.boardLayout)) {
-            recognizer.resetLayerMemory()
-            adaptivePoints.clear()
-            adaptiveKind = null
-            lastTappedPoint = null
-            waitingForBoardChange = false
-            executing = false
-            trayGuardActive = true
-            trayGuardStartedAt = System.currentTimeMillis()
-            shuffleRecoveryUntil = System.currentTimeMillis() + 350L
-            publish(emptyList(), "Mescola rilevata: rianalizzo…")
-            publishControlState()
-            return
-        }
-        if (System.currentTimeMillis() < shuffleRecoveryUntil || boardStableFrames < 2) {
-            publish(emptyList(), "Attendo tabellone stabile…")
-            return
-        }
         if (executing) {
             continueAdaptiveSequence(frame.boardTiles)
             return
@@ -298,31 +273,6 @@ class CaptureService : Service() {
         publishControlState()
     }
 
-    private fun detectBoardShuffle(current: Set<String>): Boolean {
-        if (current.isEmpty()) {
-            boardStableFrames = 0
-            return false
-        }
-        if (lastBoardLayout.isEmpty()) {
-            lastBoardLayout = current
-            boardStableFrames = 1
-            return false
-        }
-        val union = lastBoardLayout union current
-        val intersection = lastBoardLayout intersect current
-        val changeRatio = if (union.isEmpty()) 0f
-            else 1f - intersection.size.toFloat() / union.size.toFloat()
-        val enoughTiles = lastBoardLayout.size >= 8 && current.size >= 8
-        if (enoughTiles && changeRatio >= 0.62f) {
-            lastBoardLayout = current
-            boardStableFrames = 0
-            return true
-        }
-        boardStableFrames = if (changeRatio <= 0.12f) boardStableFrames + 1 else 0
-        lastBoardLayout = current
-        return false
-    }
-
     private fun updateTrayGuard(tray: List<ItemKind>) {
         if (!trayGuardActive) return
         val signature = tray.joinToString(",") { it.name }
@@ -404,10 +354,6 @@ class CaptureService : Service() {
         trayGuardActive = false
         lastTraySignature = ""
         trayStableFrames = 0
-        lastBoardLayout = emptySet()
-        boardStableFrames = 0
-        shuffleRecoveryUntil = 0L
-        recognizer.resetLayerMemory()
         stopService(Intent(this, OverlayService::class.java))
         reader?.setOnImageAvailableListener(null, null)
         display?.release()
