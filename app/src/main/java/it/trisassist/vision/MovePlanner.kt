@@ -4,9 +4,9 @@ class MovePlanner {
     fun suggest(state: GameState): MoveSuggestion? {
         if (state.observingOtherPlayer || state.phase != GamePhase.PLAYING) return null
         val freeSlots = 7 - state.tray.size
-        // AUTO conserva sempre almeno uno spazio: evita di arrivare a sette
-        // durante l'animazione, anche quando il tris dovrebbe poi sparire.
-        val safeSlots = (freeSlots - 1).coerceAtLeast(0)
+        // AUTO conserva sempre almeno due spazi: dopo Mescola o animazioni
+        // impreviste non rischia di portare il vassoio in SOS.
+        val safeSlots = (freeSlots - 2).coerceAtLeast(0)
         val trayCounts = state.tray.groupingBy { it }.eachCount()
         val visible = state.tiles.filter { it.selectable && it.confidence >= 0.30f }
         val candidates = visible.groupBy { it.kind }.mapNotNull { (kind, tiles) ->
