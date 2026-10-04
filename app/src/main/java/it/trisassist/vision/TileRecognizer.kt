@@ -30,26 +30,13 @@ class TileRecognizer {
     private val layerMemory = mutableListOf<MemoryTile>()
     private var memoryFrame = 0
     private var emptyBoardFrames = 0
-    private val orderTemplates by lazy {
-        TemplateData.load().mapValues { (_, bitmap) ->
-            signature(bitmap, RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat()))
-        }
-    }
 
-    private data class Feature(
-        val bounds: RectF,
-        val signature: FloatArray,
-        val region: Int,
-        val templateKind: ItemKind?,
-        val templateScore: Float
-    )
+    private data class Feature(val bounds: RectF, val signature: FloatArray, val region: Int)
     private data class Triplet(
         val indices: IntArray,
         val trayCount: Int,
         val unlockScore: Float,
-        val visualScore: Float,
-        val orderMatch: Boolean,
-        val orderScore: Float
+        val visualScore: Float
     )
 
     fun recognize(source: Bitmap): RecognizedFrame {
@@ -67,27 +54,12 @@ class TileRecognizer {
                 centerY in 0.755f..0.835f -> 1
                 else -> -1
             }
-            if (region < 0) null else {
-                val tileSignature = signature(source, bounds)
-                val template = classifyTemplate(tileSignature)
-                Feature(
-                    bounds = bounds,
-                    signature = tileSignature,
-                    region = region,
-                    templateKind = template?.first,
-                    templateScore = template?.second ?: Float.MAX_VALUE
-                )
-            }
+            if (region < 0) null else Feature(bounds, signature(source, bounds), region)
         }
 
         val boardFeatures = features.filter { it.region == 0 }
         val layerHint = updateLayerMemory(boardFeatures)
-        val orderRecognition = recognizeOrder(source)
-        val triplet = findBestTriplet(
-            features,
-            source.width.toFloat(),
-            orderRecognition?.second
-        )
+        val triplet = findBestTriplet(features, source.width.toFloat())
         val chosen = triplet?.indices?.toSet().orEmpty()
         val board = features.mapIndexedNotNull { index, feature ->
             if (feature.region != 0 || index !in chosen) null else TileDetection(
@@ -109,7 +81,7 @@ class TileRecognizer {
         return RecognizedFrame(
             boardTiles = board,
             tray = tray,
-            order = orderRecognition?.first,
+            order = null,
             layerHint = layerHint,
             alpacaOverlay = detectAlpacaOverlay(source),
             boardLayout = boardFeatures.map { feature ->
@@ -201,36 +173,7 @@ class TileRecognizer {
         )
     }
 
-    private fun classifyTemplate(value: FloatArray): Pair<ItemKind, Float>? {
-        val best = orderTemplates.minByOrNull { (_, template) ->
-            distance(value, template)
-        } ?: return null
-        return best.key to distance(value, best.value)
-    }
-
-    private fun recognizeOrder(source: Bitmap): Pair<ItemKind, FloatArray>? {
-        val side = source.width * 0.086f
-        val centerX = source.width * 0.825f
-        val centerY = source.height * 0.128f
-        val bounds = RectF(
-            (centerX - side / 2f).coerceAtLeast(0f),
-            (centerY - side / 2f).coerceAtLeast(0f),
-            (centerX + side / 2f).coerceAtMost(source.width.toFloat()),
-            (centerY + side / 2f).coerceAtMost(source.height.toFloat())
-        )
-        val candidate = signature(source, bounds)
-        val best = orderTemplates.minByOrNull { (_, template) ->
-            distance(candidate, template)
-        } ?: return null
-        val score = distance(candidate, best.value)
-        return if (score <= 0.62f) best.key to candidate else null
-    }
-
-    private fun findBestTriplet(
-        features: List<Feature>,
-        screenWidth: Float,
-        orderSignature: FloatArray?
-    ): Triplet? {
+    private fun findBestTriplet(features: List<Feature>, screenWidth: Float): Triplet? {
         if (features.size < 3) return null
 
         val traySize = features.count { it.region == 1 }.coerceAtMost(7)
@@ -257,34 +200,15 @@ class TileRecognizer {
                     val distanceBC = distances[b][c]
                     val visualScore = maxOf(distanceAB, distanceAC, distanceBC)
                     val averageScore = (distanceAB + distanceAC + distanceBC) / 3f
-                    val difficultKinds = setOf(
-                        ItemKind.MILK,
-                        ItemKind.CUTLERY,
-                        ItemKind.WOOL
-                    )
-                    val templateKinds = indices.map { features[it].templateKind }
-                    val templateAgreement =
-                        templateKinds.all { it != null } &&
-                        templateKinds.distinct().size == 1 &&
-                        templateKinds.first() in difficultKinds &&
-                        indices.all { features[it].templateScore <= 0.64f }
-                    // Latte, posate e nuvola/cotone hanno grandi zone bianche:
-                    // per loro una conferma concorde dei campioni permette una
-                    // tolleranza leggermente maggiore ai bordi e alla luce.
-                    val maxVisual = if (templateAgreement) 0.66f else 0.56f
-                    val maxAverage = if (templateAgreement) 0.56f else 0.48f
-                    if (visualScore > maxVisual || averageScore > maxAverage) continue
+                    // Accept small changes in crop/lighting (especially milk, meat,
+                    // gloves and diamonds), but still require all three matches.
+                    if (visualScore > 0.56f || averageScore > 0.48f) continue
 
-                    val orderScore = orderSignature?.let { order ->
-                        indices.minOf { distance(features[it].signature, order) }
-                    } ?: Float.MAX_VALUE
                     val candidate = Triplet(
                         indices = indices,
                         trayCount = 3 - boardCount,
                         unlockScore = unlockScore(indices, features, screenWidth),
-                        visualScore = visualScore,
-                        orderMatch = orderScore <= 0.62f,
-                        orderScore = orderScore
+                        visualScore = visualScore
                     )
                     if (isBetter(candidate, best)) best = candidate
                 }
@@ -296,17 +220,7 @@ class TileRecognizer {
     private fun isBetter(candidate: Triplet, current: Triplet?): Boolean {
         if (current == null) return true
 
-        // When the order icon is recognized confidently, complete that group first.
-        if (candidate.orderMatch != current.orderMatch) {
-            return candidate.orderMatch
-        }
-        if (candidate.orderMatch && current.orderMatch &&
-            abs(candidate.orderScore - current.orderScore) > 0.03f
-        ) {
-            return candidate.orderScore < current.orderScore
-        }
-
-        // Then finish pairs/singles already in the tray: this frees space fastest.
+        // First finish pairs/singles already in the tray: this frees space fastest.
         if (candidate.trayCount != current.trayCount) {
             return candidate.trayCount > current.trayCount
         }
