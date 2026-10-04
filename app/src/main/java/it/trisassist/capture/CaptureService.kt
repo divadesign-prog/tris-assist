@@ -293,7 +293,7 @@ class CaptureService : Service() {
                 kotlin.math.abs(tile.bounds.centerX() - point.x) <= tile.bounds.width() * 0.24f &&
                 kotlin.math.abs(tile.bounds.centerY() - point.y) <= tile.bounds.height() * 0.24f
         }
-        val timedOut = System.currentTimeMillis() - tapCompletedAt >= 145L
+        val timedOut = System.currentTimeMillis() - tapCompletedAt >= 120L
         if (!sameTileStillVisible || timedOut) {
             waitingForBoardChange = false
             tapNextAdaptive()
@@ -307,7 +307,7 @@ class CaptureService : Service() {
         lastTappedPoint = null
         waitingForBoardChange = false
         executing = false
-        executionCooldownUntil = System.currentTimeMillis() + 15L
+        executionCooldownUntil = System.currentTimeMillis() + 10L
         trayGuardActive = true
         trayGuardStartedAt = System.currentTimeMillis()
         lastTraySignature = ""
@@ -367,7 +367,7 @@ class CaptureService : Service() {
             trayStableFrames = 1
         }
         val elapsed = System.currentTimeMillis() - trayGuardStartedAt
-        if ((trayStableFrames >= 2 && elapsed >= 45L) || elapsed >= 320L) {
+        if ((trayStableFrames >= 2 && elapsed >= 35L) || elapsed >= 260L) {
             trayGuardActive = false
         }
     }
