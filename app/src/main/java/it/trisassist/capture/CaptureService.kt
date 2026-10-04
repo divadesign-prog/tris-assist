@@ -127,7 +127,7 @@ class CaptureService : Service() {
         reader?.setOnImageAvailableListener({ source ->
             val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
             val now = System.currentTimeMillis()
-            if (now - lastAnalysis < 65L) {
+            if (now - lastAnalysis < 50L) {
                 image.close()
                 return@setOnImageAvailableListener
             }
@@ -283,7 +283,7 @@ class CaptureService : Service() {
             trayStableFrames = 1
         }
         val elapsed = System.currentTimeMillis() - trayGuardStartedAt
-        if ((trayStableFrames >= 2 && elapsed >= 60L) || elapsed >= 320L) {
+        if ((trayStableFrames >= 2 && elapsed >= 45L) || elapsed >= 320L) {
             trayGuardActive = false
         }
     }
