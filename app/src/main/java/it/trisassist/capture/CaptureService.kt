@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.graphics.PointF
@@ -18,6 +19,8 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Environment
+import android.provider.MediaStore
 import android.os.IBinder
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
@@ -40,6 +43,7 @@ class CaptureService : Service() {
     private var executing = false
     private var executionCooldownUntil = 0L
     private var lastAnalysis = 0L
+    @Volatile private var saveNextFrame = false
     private var adaptivePoints = mutableListOf<PointF>()
     private var adaptiveKind: ItemKind? = null
     private var lastTappedPoint: PointF? = null
@@ -68,6 +72,10 @@ class CaptureService : Service() {
         when (intent?.action) {
             ACTION_STOP -> stopCapture()
             ACTION_START -> startCapture(intent)
+            ACTION_REPORT_FRAME -> {
+                saveNextFrame = true
+                publish(emptyList(), "Segnalazione pronta…")
+            }
             ACTION_ONE_TRIPLE -> {
                 if (!executing) {
                     autoMode = false
@@ -149,6 +157,10 @@ class CaptureService : Service() {
             runCatching {
                 val bitmap = imageToBitmap(image)
                 image.close()
+                if (saveNextFrame) {
+                    saveNextFrame = false
+                    saveReport(bitmap)
+                }
                 analyze(bitmap)
                 bitmap.recycle()
             }.onFailure {
@@ -425,6 +437,44 @@ class CaptureService : Service() {
         return cropped
     }
 
+    private fun saveReport(bitmap: Bitmap) {
+        val name = "TrisAssist-segnalazione-" + System.currentTimeMillis() + ".png"
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                    put(
+                        MediaStore.MediaColumns.RELATIVE_PATH,
+                        Environment.DIRECTORY_DOWNLOADS + "/TrisAssist"
+                    )
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    values
+                ) ?: error("MediaStore unavailable")
+                contentResolver.openOutputStream(uri)?.use { stream ->
+                    check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream))
+                } ?: error("Output unavailable")
+                values.clear()
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                contentResolver.update(uri, values, null, null)
+            } else {
+                val folder = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+                    ?: error("Storage unavailable")
+                val file = java.io.File(folder, name)
+                file.outputStream().use { stream ->
+                    check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream))
+                }
+            }
+        }.onSuccess {
+            publish(emptyList(), "Salvata in Download/TrisAssist")
+        }.onFailure {
+            publish(emptyList(), "Non riesco a salvare")
+        }
+    }
+
     private fun stopCapture() {
         if (stopping) return
         stopping = true
@@ -479,6 +529,7 @@ class CaptureService : Service() {
         const val ACTION_STOP = "it.trisassist.STOP"
         const val ACTION_ONE_TRIPLE = "it.trisassist.ONE_TRIPLE"
         const val ACTION_AUTO = "it.trisassist.AUTO"
+        const val ACTION_REPORT_FRAME = "it.trisassist.REPORT_FRAME"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
         private const val CHANNEL_ID = "capture"
