@@ -49,6 +49,8 @@ class CaptureService : Service() {
     private var trayGuardStartedAt = 0L
     private var lastTraySignature = ""
     private var trayStableFrames = 0
+    private var layerProbeLocked = false
+    private var lastObservedTraySize = -1
     private val recognizer by lazy { TileRecognizer() }
     private val planner = MovePlanner()
 
@@ -87,6 +89,8 @@ class CaptureService : Service() {
         trayGuardActive = false
         lastTraySignature = ""
         trayStableFrames = 0
+        layerProbeLocked = false
+        lastObservedTraySize = -1
         startForeground(
             NOTIFICATION_ID,
             NotificationCompat.Builder(this, CHANNEL_ID)
@@ -166,6 +170,10 @@ class CaptureService : Service() {
             publicStorageUnlocked = false,
             phase = GamePhase.PLAYING
         )
+        if (lastObservedTraySize >= 0 && frame.tray.size <= lastObservedTraySize - 2) {
+            layerProbeLocked = false
+        }
+        lastObservedTraySize = frame.tray.size
         updateTrayGuard(frame.tray)
         if (executing) {
             continueAdaptiveSequence(frame.boardTiles)
@@ -174,7 +182,8 @@ class CaptureService : Service() {
 
         val suggestion = planner.suggest(state)
         val layerHint = frame.layerHint?.takeIf {
-            autoMode && frame.tray.size <= 3 && it.confidence >= 0.80f
+            autoMode && !layerProbeLocked &&
+                frame.tray.size <= 2 && it.confidence >= 0.84f
         }
         when {
             suggestion == null && layerHint != null -> {
@@ -188,6 +197,7 @@ class CaptureService : Service() {
                 if (autoMode && !executing && mayExecute &&
                     !isInsidePublicStorage(point, bitmap)
                 ) {
+                    layerProbeLocked = true
                     startAdaptiveSequence(listOf(point), ItemKind.UNKNOWN)
                 }
             }
@@ -260,6 +270,7 @@ class CaptureService : Service() {
     }
 
     private fun finishAdaptiveSequence() {
+        val completedKind = adaptiveKind
         adaptivePoints.clear()
         adaptiveKind = null
         lastTappedPoint = null
@@ -270,6 +281,9 @@ class CaptureService : Service() {
         trayGuardStartedAt = System.currentTimeMillis()
         lastTraySignature = ""
         trayStableFrames = 0
+        if (completedKind != null && completedKind != ItemKind.UNKNOWN) {
+            layerProbeLocked = false
+        }
         publishControlState()
     }
 
@@ -354,6 +368,8 @@ class CaptureService : Service() {
         trayGuardActive = false
         lastTraySignature = ""
         trayStableFrames = 0
+        layerProbeLocked = false
+        lastObservedTraySize = -1
         stopService(Intent(this, OverlayService::class.java))
         reader?.setOnImageAvailableListener(null, null)
         display?.release()
