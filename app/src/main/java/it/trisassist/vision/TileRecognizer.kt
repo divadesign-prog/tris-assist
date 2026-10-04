@@ -15,7 +15,8 @@ data class RecognizedFrame(
     val boardTiles: List<TileDetection>,
     val tray: List<ItemKind>,
     val order: ItemKind?,
-    val layerHint: LayerHint? = null
+    val layerHint: LayerHint? = null,
+    val alpacaOverlay: Boolean = false
 )
 
 class TileRecognizer {
@@ -92,7 +93,8 @@ class TileRecognizer {
             boardTiles = board,
             tray = tray,
             order = orderRecognition?.first,
-            layerHint = layerHint
+            layerHint = layerHint,
+            alpacaOverlay = detectAlpacaOverlay(source)
         )
     }
 
@@ -367,6 +369,31 @@ class TileRecognizer {
             values[i * 3 + channel] = (values[i * 3 + channel] - means[channel]) / deviations[channel]
         }
         return values
+    }
+
+    private fun detectAlpacaOverlay(bitmap: Bitmap): Boolean {
+        val stride = 6
+        val minY = (bitmap.height * 0.18f).toInt()
+        val maxY = (bitmap.height * 0.78f).toInt()
+        var white = 0
+        var samples = 0
+        for (y in minY until maxY step stride) {
+            for (x in 0 until bitmap.width step stride) {
+                val color = bitmap.getPixel(x, y)
+                val r = (color shr 16) and 255
+                val g = (color shr 8) and 255
+                val b = color and 255
+                val maxChannel = maxOf(r, g, b)
+                val minChannel = minOf(r, g, b)
+                if (r >= 242 && g >= 242 && b >= 242 &&
+                    maxChannel - minChannel <= 12
+                ) white++
+                samples++
+            }
+        }
+        // Le alpache coprono una grande parte centrale con bianco neutro.
+        // Le tessere normali sono color crema e restano sotto questa soglia.
+        return samples > 0 && white.toFloat() / samples >= 0.14f
     }
 
     private fun findBrightTiles(bitmap: Bitmap): List<RectF> {
