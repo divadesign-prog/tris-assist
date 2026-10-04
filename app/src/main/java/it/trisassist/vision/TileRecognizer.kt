@@ -16,7 +16,8 @@ data class RecognizedFrame(
     val tray: List<ItemKind>,
     val order: ItemKind?,
     val layerHint: LayerHint? = null,
-    val alpacaOverlay: Boolean = false
+    val alpacaOverlay: Boolean = false,
+    val boardLayout: Set<String> = emptySet()
 )
 
 class TileRecognizer {
@@ -94,7 +95,12 @@ class TileRecognizer {
             tray = tray,
             order = orderRecognition?.first,
             layerHint = layerHint,
-            alpacaOverlay = detectAlpacaOverlay(source)
+            alpacaOverlay = detectAlpacaOverlay(source),
+            boardLayout = boardFeatures.map { feature ->
+                val x = (feature.bounds.centerX() / source.width * 24f).toInt()
+                val y = (feature.bounds.centerY() / source.height * 40f).toInt()
+                "$x:$y"
+            }.toSet()
         )
     }
 
