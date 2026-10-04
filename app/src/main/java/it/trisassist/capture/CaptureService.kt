@@ -162,6 +162,19 @@ class CaptureService : Service() {
 
     private fun analyze(bitmap: Bitmap) {
         val frame = recognizer.recognize(bitmap)
+        if (frame.alpacaOverlay) {
+            autoMode = false
+            oneTripleArmed = false
+            adaptivePoints.clear()
+            adaptiveKind = null
+            lastTappedPoint = null
+            waitingForBoardChange = false
+            executing = false
+            layerProbeLocked = true
+            publish(emptyList(), "AUTO fermato: evento alpaca")
+            publishControlState()
+            return
+        }
         val state = GameState(
             tiles = frame.boardTiles,
             tray = frame.tray,
