@@ -28,13 +28,20 @@ class TileRecognizer {
     private val layerMemory = mutableListOf<MemoryTile>()
     private var memoryFrame = 0
     private var emptyBoardFrames = 0
+    private val orderTemplates by lazy {
+        TemplateData.load().mapValues { (_, bitmap) ->
+            signature(bitmap, RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat()))
+        }
+    }
 
     private data class Feature(val bounds: RectF, val signature: FloatArray, val region: Int)
     private data class Triplet(
         val indices: IntArray,
         val trayCount: Int,
         val unlockScore: Float,
-        val visualScore: Float
+        val visualScore: Float,
+        val orderMatch: Boolean,
+        val orderScore: Float
     )
 
     fun recognize(source: Bitmap): RecognizedFrame {
@@ -57,7 +64,12 @@ class TileRecognizer {
 
         val boardFeatures = features.filter { it.region == 0 }
         val layerHint = updateLayerMemory(boardFeatures)
-        val triplet = findBestTriplet(features, source.width.toFloat())
+        val orderRecognition = recognizeOrder(source)
+        val triplet = findBestTriplet(
+            features,
+            source.width.toFloat(),
+            orderRecognition?.second
+        )
         val chosen = triplet?.indices?.toSet().orEmpty()
         val board = features.mapIndexedNotNull { index, feature ->
             if (feature.region != 0 || index !in chosen) null else TileDetection(
@@ -79,7 +91,7 @@ class TileRecognizer {
         return RecognizedFrame(
             boardTiles = board,
             tray = tray,
-            order = null,
+            order = orderRecognition?.first,
             layerHint = layerHint
         )
     }
@@ -165,7 +177,29 @@ class TileRecognizer {
         )
     }
 
-    private fun findBestTriplet(features: List<Feature>, screenWidth: Float): Triplet? {
+    private fun recognizeOrder(source: Bitmap): Pair<ItemKind, FloatArray>? {
+        val side = source.width * 0.086f
+        val centerX = source.width * 0.825f
+        val centerY = source.height * 0.128f
+        val bounds = RectF(
+            (centerX - side / 2f).coerceAtLeast(0f),
+            (centerY - side / 2f).coerceAtLeast(0f),
+            (centerX + side / 2f).coerceAtMost(source.width.toFloat()),
+            (centerY + side / 2f).coerceAtMost(source.height.toFloat())
+        )
+        val candidate = signature(source, bounds)
+        val best = orderTemplates.minByOrNull { (_, template) ->
+            distance(candidate, template)
+        } ?: return null
+        val score = distance(candidate, best.value)
+        return if (score <= 0.62f) best.key to candidate else null
+    }
+
+    private fun findBestTriplet(
+        features: List<Feature>,
+        screenWidth: Float,
+        orderSignature: FloatArray?
+    ): Triplet? {
         if (features.size < 3) return null
 
         val traySize = features.count { it.region == 1 }.coerceAtMost(7)
@@ -196,11 +230,16 @@ class TileRecognizer {
                     // gloves and diamonds), but still require all three matches.
                     if (visualScore > 0.56f || averageScore > 0.48f) continue
 
+                    val orderScore = orderSignature?.let { order ->
+                        indices.minOf { distance(features[it].signature, order) }
+                    } ?: Float.MAX_VALUE
                     val candidate = Triplet(
                         indices = indices,
                         trayCount = 3 - boardCount,
                         unlockScore = unlockScore(indices, features, screenWidth),
-                        visualScore = visualScore
+                        visualScore = visualScore,
+                        orderMatch = orderScore <= 0.62f,
+                        orderScore = orderScore
                     )
                     if (isBetter(candidate, best)) best = candidate
                 }
@@ -212,7 +251,17 @@ class TileRecognizer {
     private fun isBetter(candidate: Triplet, current: Triplet?): Boolean {
         if (current == null) return true
 
-        // First finish pairs/singles already in the tray: this frees space fastest.
+        // When the order icon is recognized confidently, complete that group first.
+        if (candidate.orderMatch != current.orderMatch) {
+            return candidate.orderMatch
+        }
+        if (candidate.orderMatch && current.orderMatch &&
+            abs(candidate.orderScore - current.orderScore) > 0.03f
+        ) {
+            return candidate.orderScore < current.orderScore
+        }
+
+        // Then finish pairs/singles already in the tray: this frees space fastest.
         if (candidate.trayCount != current.trayCount) {
             return candidate.trayCount > current.trayCount
         }
