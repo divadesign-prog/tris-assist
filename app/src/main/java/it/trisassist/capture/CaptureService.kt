@@ -51,6 +51,11 @@ class CaptureService : Service() {
     private var trayStableFrames = 0
     private var layerProbeLocked = false
     private var lastObservedTraySize = -1
+    private var alpacaPauseActive = false
+    private var alpacaChoiceLayout: Set<String> = emptySet()
+    private var alpacaChoiceSeenAt = 0L
+    private var alpacaResumeLayout: Set<String> = emptySet()
+    private var alpacaResumeStableFrames = 0
     private val recognizer by lazy { TileRecognizer() }
     private val planner = MovePlanner()
 
@@ -91,6 +96,11 @@ class CaptureService : Service() {
         trayStableFrames = 0
         layerProbeLocked = false
         lastObservedTraySize = -1
+        alpacaPauseActive = false
+        alpacaChoiceLayout = emptySet()
+        alpacaChoiceSeenAt = 0L
+        alpacaResumeLayout = emptySet()
+        alpacaResumeStableFrames = 0
         startForeground(
             NOTIFICATION_ID,
             NotificationCompat.Builder(this, CHANNEL_ID)
@@ -163,7 +173,11 @@ class CaptureService : Service() {
     private fun analyze(bitmap: Bitmap) {
         val frame = recognizer.recognize(bitmap)
         if (frame.alpacaOverlay) {
-            autoMode = false
+            alpacaPauseActive = true
+            alpacaChoiceLayout = emptySet()
+            alpacaChoiceSeenAt = 0L
+            alpacaResumeLayout = emptySet()
+            alpacaResumeStableFrames = 0
             oneTripleArmed = false
             adaptivePoints.clear()
             adaptiveKind = null
@@ -171,8 +185,12 @@ class CaptureService : Service() {
             waitingForBoardChange = false
             executing = false
             layerProbeLocked = true
-            publish(emptyList(), "AUTO fermato: evento alpaca")
+            publish(emptyList(), "AUTO in pausa: scegli cosa eliminare")
             publishControlState()
+            return
+        }
+        if (alpacaPauseActive && !handleAlpacaResume(frame.boardLayout)) {
+            publish(emptyList(), "AUTO in pausa: scegli cosa eliminare")
             return
         }
         val state = GameState(
@@ -300,6 +318,45 @@ class CaptureService : Service() {
         publishControlState()
     }
 
+    private fun handleAlpacaResume(current: Set<String>): Boolean {
+        if (current.isEmpty()) return false
+        val now = System.currentTimeMillis()
+        if (alpacaChoiceLayout.isEmpty()) {
+            alpacaChoiceLayout = current
+            alpacaChoiceSeenAt = now
+            return false
+        }
+        val choiceChange = layoutChange(alpacaChoiceLayout, current)
+        if (alpacaResumeLayout.isEmpty()) {
+            if (now - alpacaChoiceSeenAt < 120L || choiceChange < 0.35f) return false
+            alpacaResumeLayout = current
+            alpacaResumeStableFrames = 1
+            return false
+        }
+        if (layoutChange(alpacaResumeLayout, current) <= 0.12f) {
+            alpacaResumeStableFrames++
+        } else {
+            alpacaResumeLayout = current
+            alpacaResumeStableFrames = 1
+        }
+        if (alpacaResumeStableFrames < 3) return false
+        alpacaPauseActive = false
+        alpacaChoiceLayout = emptySet()
+        alpacaResumeLayout = emptySet()
+        alpacaResumeStableFrames = 0
+        layerProbeLocked = false
+        trayGuardActive = true
+        trayGuardStartedAt = now
+        publish(emptyList(), "AUTO riparte")
+        return true
+    }
+
+    private fun layoutChange(first: Set<String>, second: Set<String>): Float {
+        val union = first union second
+        if (union.isEmpty()) return 0f
+        return 1f - (first intersect second).size.toFloat() / union.size.toFloat()
+    }
+
     private fun updateTrayGuard(tray: List<ItemKind>) {
         if (!trayGuardActive) return
         val signature = tray.joinToString(",") { it.name }
@@ -383,6 +440,11 @@ class CaptureService : Service() {
         trayStableFrames = 0
         layerProbeLocked = false
         lastObservedTraySize = -1
+        alpacaPauseActive = false
+        alpacaChoiceLayout = emptySet()
+        alpacaChoiceSeenAt = 0L
+        alpacaResumeLayout = emptySet()
+        alpacaResumeStableFrames = 0
         stopService(Intent(this, OverlayService::class.java))
         reader?.setOnImageAvailableListener(null, null)
         display?.release()
