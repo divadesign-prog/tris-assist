@@ -36,7 +36,13 @@ class TileRecognizer {
         }
     }
 
-    private data class Feature(val bounds: RectF, val signature: FloatArray, val region: Int)
+    private data class Feature(
+        val bounds: RectF,
+        val signature: FloatArray,
+        val region: Int,
+        val templateKind: ItemKind?,
+        val templateScore: Float
+    )
     private data class Triplet(
         val indices: IntArray,
         val trayCount: Int,
@@ -61,7 +67,17 @@ class TileRecognizer {
                 centerY in 0.755f..0.835f -> 1
                 else -> -1
             }
-            if (region < 0) null else Feature(bounds, signature(source, bounds), region)
+            if (region < 0) null else {
+                val tileSignature = signature(source, bounds)
+                val template = classifyTemplate(tileSignature)
+                Feature(
+                    bounds = bounds,
+                    signature = tileSignature,
+                    region = region,
+                    templateKind = template?.first,
+                    templateScore = template?.second ?: Float.MAX_VALUE
+                )
+            }
         }
 
         val boardFeatures = features.filter { it.region == 0 }
@@ -185,6 +201,13 @@ class TileRecognizer {
         )
     }
 
+    private fun classifyTemplate(value: FloatArray): Pair<ItemKind, Float>? {
+        val best = orderTemplates.minByOrNull { (_, template) ->
+            distance(value, template)
+        } ?: return null
+        return best.key to distance(value, best.value)
+    }
+
     private fun recognizeOrder(source: Bitmap): Pair<ItemKind, FloatArray>? {
         val side = source.width * 0.086f
         val centerX = source.width * 0.825f
@@ -234,9 +257,23 @@ class TileRecognizer {
                     val distanceBC = distances[b][c]
                     val visualScore = maxOf(distanceAB, distanceAC, distanceBC)
                     val averageScore = (distanceAB + distanceAC + distanceBC) / 3f
-                    // Accept small changes in crop/lighting (especially milk, meat,
-                    // gloves and diamonds), but still require all three matches.
-                    if (visualScore > 0.56f || averageScore > 0.48f) continue
+                    val difficultKinds = setOf(
+                        ItemKind.MILK,
+                        ItemKind.CUTLERY,
+                        ItemKind.WOOL
+                    )
+                    val templateKinds = indices.map { features[it].templateKind }
+                    val templateAgreement =
+                        templateKinds.all { it != null } &&
+                        templateKinds.distinct().size == 1 &&
+                        templateKinds.first() in difficultKinds &&
+                        indices.all { features[it].templateScore <= 0.64f }
+                    // Latte, posate e nuvola/cotone hanno grandi zone bianche:
+                    // per loro una conferma concorde dei campioni permette una
+                    // tolleranza leggermente maggiore ai bordi e alla luce.
+                    val maxVisual = if (templateAgreement) 0.66f else 0.56f
+                    val maxAverage = if (templateAgreement) 0.56f else 0.48f
+                    if (visualScore > maxVisual || averageScore > maxAverage) continue
 
                     val orderScore = orderSignature?.let { order ->
                         indices.minOf { distance(features[it].signature, order) }
