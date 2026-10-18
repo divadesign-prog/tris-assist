@@ -5,7 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
-import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.graphics.PointF
@@ -19,8 +18,6 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
-import android.os.Environment
-import android.provider.MediaStore
 import android.os.IBinder
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
@@ -43,7 +40,6 @@ class CaptureService : Service() {
     private var executing = false
     private var executionCooldownUntil = 0L
     private var lastAnalysis = 0L
-    @Volatile private var saveNextFrame = false
     private var adaptivePoints = mutableListOf<PointF>()
     private var adaptiveKind: ItemKind? = null
     private var lastTappedPoint: PointF? = null
@@ -53,13 +49,6 @@ class CaptureService : Service() {
     private var trayGuardStartedAt = 0L
     private var lastTraySignature = ""
     private var trayStableFrames = 0
-    private var layerProbeLocked = false
-    private var lastObservedTraySize = -1
-    private var alpacaPauseActive = false
-    private var alpacaChoiceLayout: Set<String> = emptySet()
-    private var alpacaChoiceSeenAt = 0L
-    private var alpacaResumeLayout: Set<String> = emptySet()
-    private var alpacaResumeStableFrames = 0
     private val recognizer by lazy { TileRecognizer() }
     private val planner = MovePlanner()
 
@@ -72,10 +61,6 @@ class CaptureService : Service() {
         when (intent?.action) {
             ACTION_STOP -> stopCapture()
             ACTION_START -> startCapture(intent)
-            ACTION_REPORT_FRAME -> {
-                saveNextFrame = true
-                publish(emptyList(), "Segnalazione pronta…")
-            }
             ACTION_ONE_TRIPLE -> {
                 if (!executing) {
                     autoMode = false
@@ -102,13 +87,6 @@ class CaptureService : Service() {
         trayGuardActive = false
         lastTraySignature = ""
         trayStableFrames = 0
-        layerProbeLocked = false
-        lastObservedTraySize = -1
-        alpacaPauseActive = false
-        alpacaChoiceLayout = emptySet()
-        alpacaChoiceSeenAt = 0L
-        alpacaResumeLayout = emptySet()
-        alpacaResumeStableFrames = 0
         startForeground(
             NOTIFICATION_ID,
             NotificationCompat.Builder(this, CHANNEL_ID)
@@ -157,10 +135,6 @@ class CaptureService : Service() {
             runCatching {
                 val bitmap = imageToBitmap(image)
                 image.close()
-                if (saveNextFrame) {
-                    saveNextFrame = false
-                    saveReport(bitmap)
-                }
                 analyze(bitmap)
                 bitmap.recycle()
             }.onFailure {
@@ -184,27 +158,6 @@ class CaptureService : Service() {
 
     private fun analyze(bitmap: Bitmap) {
         val frame = recognizer.recognize(bitmap)
-        if (frame.alpacaOverlay) {
-            alpacaPauseActive = true
-            alpacaChoiceLayout = emptySet()
-            alpacaChoiceSeenAt = 0L
-            alpacaResumeLayout = emptySet()
-            alpacaResumeStableFrames = 0
-            oneTripleArmed = false
-            adaptivePoints.clear()
-            adaptiveKind = null
-            lastTappedPoint = null
-            waitingForBoardChange = false
-            executing = false
-            layerProbeLocked = true
-            publish(emptyList(), "AUTO in pausa: scegli cosa eliminare")
-            publishControlState()
-            return
-        }
-        if (alpacaPauseActive && !handleAlpacaResume(frame.boardLayout)) {
-            publish(emptyList(), "AUTO in pausa: scegli cosa eliminare")
-            return
-        }
         val state = GameState(
             tiles = frame.boardTiles,
             tray = frame.tray,
@@ -213,10 +166,6 @@ class CaptureService : Service() {
             publicStorageUnlocked = false,
             phase = GamePhase.PLAYING
         )
-        if (lastObservedTraySize >= 0 && frame.tray.size <= lastObservedTraySize - 2) {
-            layerProbeLocked = false
-        }
-        lastObservedTraySize = frame.tray.size
         updateTrayGuard(frame.tray)
         if (executing) {
             continueAdaptiveSequence(frame.boardTiles)
@@ -225,8 +174,7 @@ class CaptureService : Service() {
 
         val suggestion = planner.suggest(state)
         val layerHint = frame.layerHint?.takeIf {
-            autoMode && !layerProbeLocked &&
-                frame.tray.size <= 2 && it.confidence >= 0.84f
+            autoMode && frame.tray.size <= 3 && it.confidence >= 0.80f
         }
         when {
             suggestion == null && layerHint != null -> {
@@ -240,7 +188,6 @@ class CaptureService : Service() {
                 if (autoMode && !executing && mayExecute &&
                     !isInsidePublicStorage(point, bitmap)
                 ) {
-                    layerProbeLocked = true
                     startAdaptiveSequence(listOf(point), ItemKind.UNKNOWN)
                 }
             }
@@ -253,7 +200,7 @@ class CaptureService : Service() {
                 registerAutoMiss()
             }
             else -> {
-                publish(suggestion.taps.map { it.bounds }, "Tris trovato")
+                publish(suggestion.taps.map { it.bounds }, suggestion.reason)
                 val mayExecute = !trayGuardActive &&
                     System.currentTimeMillis() >= executionCooldownUntil
                 if ((oneTripleArmed || autoMode) && !executing && mayExecute) {
@@ -305,7 +252,7 @@ class CaptureService : Service() {
                 kotlin.math.abs(tile.bounds.centerX() - point.x) <= tile.bounds.width() * 0.24f &&
                 kotlin.math.abs(tile.bounds.centerY() - point.y) <= tile.bounds.height() * 0.24f
         }
-        val timedOut = System.currentTimeMillis() - tapCompletedAt >= 120L
+        val timedOut = System.currentTimeMillis() - tapCompletedAt >= 145L
         if (!sameTileStillVisible || timedOut) {
             waitingForBoardChange = false
             tapNextAdaptive()
@@ -313,60 +260,17 @@ class CaptureService : Service() {
     }
 
     private fun finishAdaptiveSequence() {
-        val completedKind = adaptiveKind
         adaptivePoints.clear()
         adaptiveKind = null
         lastTappedPoint = null
         waitingForBoardChange = false
         executing = false
-        executionCooldownUntil = System.currentTimeMillis() + 10L
+        executionCooldownUntil = System.currentTimeMillis() + 15L
         trayGuardActive = true
         trayGuardStartedAt = System.currentTimeMillis()
         lastTraySignature = ""
         trayStableFrames = 0
-        if (completedKind != null && completedKind != ItemKind.UNKNOWN) {
-            layerProbeLocked = false
-        }
         publishControlState()
-    }
-
-    private fun handleAlpacaResume(current: Set<String>): Boolean {
-        if (current.isEmpty()) return false
-        val now = System.currentTimeMillis()
-        if (alpacaChoiceLayout.isEmpty()) {
-            alpacaChoiceLayout = current
-            alpacaChoiceSeenAt = now
-            return false
-        }
-        val choiceChange = layoutChange(alpacaChoiceLayout, current)
-        if (alpacaResumeLayout.isEmpty()) {
-            if (now - alpacaChoiceSeenAt < 120L || choiceChange < 0.35f) return false
-            alpacaResumeLayout = current
-            alpacaResumeStableFrames = 1
-            return false
-        }
-        if (layoutChange(alpacaResumeLayout, current) <= 0.12f) {
-            alpacaResumeStableFrames++
-        } else {
-            alpacaResumeLayout = current
-            alpacaResumeStableFrames = 1
-        }
-        if (alpacaResumeStableFrames < 3) return false
-        alpacaPauseActive = false
-        alpacaChoiceLayout = emptySet()
-        alpacaResumeLayout = emptySet()
-        alpacaResumeStableFrames = 0
-        layerProbeLocked = false
-        trayGuardActive = true
-        trayGuardStartedAt = now
-        publish(emptyList(), "AUTO riparte")
-        return true
-    }
-
-    private fun layoutChange(first: Set<String>, second: Set<String>): Float {
-        val union = first union second
-        if (union.isEmpty()) return 0f
-        return 1f - (first intersect second).size.toFloat() / union.size.toFloat()
     }
 
     private fun updateTrayGuard(tray: List<ItemKind>) {
@@ -379,7 +283,7 @@ class CaptureService : Service() {
             trayStableFrames = 1
         }
         val elapsed = System.currentTimeMillis() - trayGuardStartedAt
-        if ((trayStableFrames >= 2 && elapsed >= 35L) || elapsed >= 260L) {
+        if ((trayStableFrames >= 2 && elapsed >= 45L) || elapsed >= 320L) {
             trayGuardActive = false
         }
     }
@@ -437,44 +341,6 @@ class CaptureService : Service() {
         return cropped
     }
 
-    private fun saveReport(bitmap: Bitmap) {
-        val name = "TrisAssist-segnalazione-" + System.currentTimeMillis() + ".png"
-        runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val values = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-                    put(
-                        MediaStore.MediaColumns.RELATIVE_PATH,
-                        Environment.DIRECTORY_DOWNLOADS + "/TrisAssist"
-                    )
-                    put(MediaStore.MediaColumns.IS_PENDING, 1)
-                }
-                val uri = contentResolver.insert(
-                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                    values
-                ) ?: error("MediaStore unavailable")
-                contentResolver.openOutputStream(uri)?.use { stream ->
-                    check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream))
-                } ?: error("Output unavailable")
-                values.clear()
-                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-                contentResolver.update(uri, values, null, null)
-            } else {
-                val folder = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
-                    ?: error("Storage unavailable")
-                val file = java.io.File(folder, name)
-                file.outputStream().use { stream ->
-                    check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream))
-                }
-            }
-        }.onSuccess {
-            publish(emptyList(), "Salvata in Download/TrisAssist")
-        }.onFailure {
-            publish(emptyList(), "Non riesco a salvare")
-        }
-    }
-
     private fun stopCapture() {
         if (stopping) return
         stopping = true
@@ -488,13 +354,6 @@ class CaptureService : Service() {
         trayGuardActive = false
         lastTraySignature = ""
         trayStableFrames = 0
-        layerProbeLocked = false
-        lastObservedTraySize = -1
-        alpacaPauseActive = false
-        alpacaChoiceLayout = emptySet()
-        alpacaChoiceSeenAt = 0L
-        alpacaResumeLayout = emptySet()
-        alpacaResumeStableFrames = 0
         stopService(Intent(this, OverlayService::class.java))
         reader?.setOnImageAvailableListener(null, null)
         display?.release()
@@ -529,7 +388,6 @@ class CaptureService : Service() {
         const val ACTION_STOP = "it.trisassist.STOP"
         const val ACTION_ONE_TRIPLE = "it.trisassist.ONE_TRIPLE"
         const val ACTION_AUTO = "it.trisassist.AUTO"
-        const val ACTION_REPORT_FRAME = "it.trisassist.REPORT_FRAME"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
         private const val CHANNEL_ID = "capture"
