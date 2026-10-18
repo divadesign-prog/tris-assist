@@ -58,15 +58,7 @@ class TileRecognizer {
         val boardFeatures = features.filter { it.region == 0 }
         val layerHint = updateLayerMemory(boardFeatures)
         val triplet = findBestTriplet(features, source.width.toFloat())
-        // Se non esiste un tris e il vassoio è quasi vuoto, espone una sola
-        // estremità della catena. Con due o più tessere non esplora.
-        val traySize = features.count { it.region == 1 }.coerceAtMost(7)
-        val pathIndex = if (triplet == null && traySize <= 1) {
-            findBestPathTile(features, source.width.toFloat())
-        } else null
-        val chosen = triplet?.indices?.toSet()
-            ?: pathIndex?.let { setOf(it) }
-            ?: emptySet()
+        val chosen = triplet?.indices?.toSet().orEmpty()
         val board = features.mapIndexedNotNull { index, feature ->
             if (feature.region != 0 || index !in chosen) null else TileDetection(
                 kind = ItemKind.GEM,
@@ -171,13 +163,6 @@ class TileRecognizer {
             blockerBounds = RectF(blocker.bounds),
             confidence = (0.72f + coveredMatches * 0.07f).coerceAtMost(0.93f)
         )
-    }
-
-    private fun findBestPathTile(features: List<Feature>, screenWidth: Float): Int? {
-        val boardIndices = features.indices.filter { features[it].region == 0 }
-        return boardIndices.maxByOrNull { index ->
-            unlockScore(intArrayOf(index), features, screenWidth)
-        }
     }
 
     private fun findBestTriplet(features: List<Feature>, screenWidth: Float): Triplet? {
