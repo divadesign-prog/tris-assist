@@ -26,8 +26,6 @@ class OverlayService : Service() {
     private var overlay: SuggestionOverlayView? = null
     private var bubble: TextView? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
-    private var reportButton: TextView? = null
-    private var reportParams: WindowManager.LayoutParams? = null
     private var armed = false
     private var autoMode = false
 
@@ -57,7 +55,6 @@ class OverlayService : Service() {
         windowManager = getSystemService(WindowManager::class.java)
         addSuggestionLayer()
         addControlBubble()
-        addReportButton()
 
         val filter = IntentFilter().apply {
             addAction(ACTION_SUGGESTION)
@@ -116,39 +113,6 @@ class OverlayService : Service() {
         updateBubble()
         attachDragListener()
         windowManager.addView(bubble, bubbleParams)
-    }
-
-    private fun addReportButton() {
-        val density = resources.displayMetrics.density
-        reportButton = TextView(this).apply {
-            text = "SEGNALA"
-            textSize = 9f
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                cornerRadius = 8f * density
-                setColor(Color.argb(220, 42, 86, 160))
-                setStroke((1 * density).toInt(), Color.WHITE)
-            }
-            setOnClickListener {
-                startService(Intent(this@OverlayService, CaptureService::class.java).apply {
-                    action = CaptureService.ACTION_REPORT_FRAME
-                })
-            }
-        }
-        reportParams = WindowManager.LayoutParams(
-            (64 * density).toInt(),
-            (26 * density).toInt(),
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = resources.displayMetrics.widthPixels - (72 * density).toInt()
-            y = (8 * density).toInt()
-        }
-        windowManager.addView(reportButton, reportParams)
     }
 
     private fun attachDragListener() {
@@ -232,12 +196,9 @@ class OverlayService : Service() {
         runCatching { unregisterReceiver(receiver) }
         overlay?.let { windowManager.removeView(it) }
         bubble?.let { windowManager.removeView(it) }
-        reportButton?.let { windowManager.removeView(it) }
         overlay = null
         bubble = null
         bubbleParams = null
-        reportButton = null
-        reportParams = null
         super.onDestroy()
     }
 
