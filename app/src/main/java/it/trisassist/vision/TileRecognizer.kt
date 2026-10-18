@@ -15,9 +15,7 @@ data class RecognizedFrame(
     val boardTiles: List<TileDetection>,
     val tray: List<ItemKind>,
     val order: ItemKind?,
-    val layerHint: LayerHint? = null,
-    val alpacaOverlay: Boolean = false,
-    val boardLayout: Set<String> = emptySet()
+    val layerHint: LayerHint? = null
 )
 
 class TileRecognizer {
@@ -60,7 +58,15 @@ class TileRecognizer {
         val boardFeatures = features.filter { it.region == 0 }
         val layerHint = updateLayerMemory(boardFeatures)
         val triplet = findBestTriplet(features, source.width.toFloat())
-        val chosen = triplet?.indices?.toSet().orEmpty()
+        // Se non esiste un tris e il vassoio è quasi vuoto, espone una sola
+        // estremità della catena. Con due o più tessere non esplora.
+        val traySize = features.count { it.region == 1 }.coerceAtMost(7)
+        val pathIndex = if (triplet == null && traySize <= 1) {
+            findBestPathTile(features, source.width.toFloat())
+        } else null
+        val chosen = triplet?.indices?.toSet()
+            ?: pathIndex?.let { setOf(it) }
+            ?: emptySet()
         val board = features.mapIndexedNotNull { index, feature ->
             if (feature.region != 0 || index !in chosen) null else TileDetection(
                 kind = ItemKind.GEM,
@@ -82,13 +88,7 @@ class TileRecognizer {
             boardTiles = board,
             tray = tray,
             order = null,
-            layerHint = layerHint,
-            alpacaOverlay = detectAlpacaOverlay(source),
-            boardLayout = boardFeatures.map { feature ->
-                val x = (feature.bounds.centerX() / source.width * 24f).toInt()
-                val y = (feature.bounds.centerY() / source.height * 40f).toInt()
-                "$x:$y"
-            }.toSet()
+            layerHint = layerHint
         )
     }
 
@@ -171,6 +171,13 @@ class TileRecognizer {
             blockerBounds = RectF(blocker.bounds),
             confidence = (0.72f + coveredMatches * 0.07f).coerceAtMost(0.93f)
         )
+    }
+
+    private fun findBestPathTile(features: List<Feature>, screenWidth: Float): Int? {
+        val boardIndices = features.indices.filter { features[it].region == 0 }
+        return boardIndices.maxByOrNull { index ->
+            unlockScore(intArrayOf(index), features, screenWidth)
+        }
     }
 
     private fun findBestTriplet(features: List<Feature>, screenWidth: Float): Triplet? {
@@ -326,31 +333,6 @@ class TileRecognizer {
             values[i * 3 + channel] = (values[i * 3 + channel] - means[channel]) / deviations[channel]
         }
         return values
-    }
-
-    private fun detectAlpacaOverlay(bitmap: Bitmap): Boolean {
-        val stride = 6
-        val minY = (bitmap.height * 0.18f).toInt()
-        val maxY = (bitmap.height * 0.78f).toInt()
-        var white = 0
-        var samples = 0
-        for (y in minY until maxY step stride) {
-            for (x in 0 until bitmap.width step stride) {
-                val color = bitmap.getPixel(x, y)
-                val r = (color shr 16) and 255
-                val g = (color shr 8) and 255
-                val b = color and 255
-                val maxChannel = maxOf(r, g, b)
-                val minChannel = minOf(r, g, b)
-                if (r >= 242 && g >= 242 && b >= 242 &&
-                    maxChannel - minChannel <= 12
-                ) white++
-                samples++
-            }
-        }
-        // Le alpache coprono una grande parte centrale con bianco neutro.
-        // Le tessere normali sono color crema e restano sotto questa soglia.
-        return samples > 0 && white.toFloat() / samples >= 0.14f
     }
 
     private fun findBrightTiles(bitmap: Bitmap): List<RectF> {
