@@ -17,25 +17,12 @@ class MovePlanner {
                 Triple(orderBonus + completionBonus, kind, tiles.take(needed))
             } else null
         }
-        val best = candidates.maxByOrNull { it.first }
-        if (best != null) {
-            return MoveSuggestion(
-                taps = best.third,
-                kind = best.second,
-                reason = if (best.second == state.order) "Completa il tris dell'ordine" else "Completa un tris sicuro",
-                danger = freeSlots <= 2
-            )
-        }
-
-        // TileRecognizer espone una sola tessera soltanto quando non ha trovato
-        // tris e il vassoio contiene al massimo una tessera.
-        val path = visible.singleOrNull() ?: return null
-        if (state.tray.size > 1 || safeSlots < 1) return null
+        val best = candidates.maxByOrNull { it.first } ?: return null
         return MoveSuggestion(
-            taps = listOf(path),
-            kind = path.kind,
-            reason = "Apro una catena sicura",
-            danger = false
+            taps = best.third,
+            kind = best.second,
+            reason = if (best.second == state.order) "Completa il tris dell'ordine" else "Completa un tris sicuro",
+            danger = freeSlots <= 2
         )
     }
 }
