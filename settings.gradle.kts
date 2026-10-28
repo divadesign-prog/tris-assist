@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "TrisAssist"
-include(":app")
+include(":app", ":autoapp")

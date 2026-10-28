@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Tris Assist</string>
+    <string name="accessibility_description">Consente a Tris Assist di eseguire un solo tris quando premi il pulsante 1×.</string>
+</resources>
