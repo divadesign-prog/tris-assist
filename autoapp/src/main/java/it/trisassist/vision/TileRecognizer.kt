@@ -58,6 +58,7 @@ class TileRecognizer {
 
         val boardFeatures = features.filter { it.region == 0 }
         val layerHint = updateLayerMemory(boardFeatures)
+            ?: symmetryOpeningHint(boardFeatures, source.width.toFloat())
         val triplet = findBestTriplet(features, source.width.toFloat())
         val chosen = triplet?.indices?.toSet().orEmpty()
         val board = features.mapIndexedNotNull { index, feature ->
@@ -82,6 +83,39 @@ class TileRecognizer {
             tray = tray,
             order = null,
             layerHint = layerHint
+        )
+    }
+
+    private fun symmetryOpeningHint(current: List<Feature>, screenWidth: Float): LayerHint? {
+        if (current.size < 2) return null
+        val centerX = screenWidth / 2f
+        val paired = current.mapNotNull { tile ->
+            val mirrorX = screenWidth - tile.bounds.centerX()
+            val tolerance = tile.bounds.width() * 0.62f
+            val counterpart = current
+                .filter { other ->
+                    (tile.bounds.centerX() < centerX) != (other.bounds.centerX() < centerX)
+                }
+                .minByOrNull { other ->
+                    abs(other.bounds.centerX() - mirrorX) +
+                        abs(other.bounds.centerY() - tile.bounds.centerY())
+                } ?: return@mapNotNull null
+            val dx = abs(counterpart.bounds.centerX() - mirrorX)
+            val dy = abs(counterpart.bounds.centerY() - tile.bounds.centerY())
+            if (dx > tolerance || dy > tolerance) return@mapNotNull null
+
+            val near = current.count { other ->
+                other !== tile &&
+                    abs(other.bounds.centerX() - tile.bounds.centerX()) < tile.bounds.width() * 1.55f &&
+                    abs(other.bounds.centerY() - tile.bounds.centerY()) < tile.bounds.height() * 1.55f
+            }
+            val edgePenalty = abs(tile.bounds.centerX() - centerX) / centerX
+            Triple(tile, near.toFloat() - edgePenalty * 0.35f, counterpart)
+        }
+        val best = paired.maxByOrNull { it.second } ?: return null
+        return LayerHint(
+            blockerBounds = RectF(best.first.bounds),
+            confidence = 0.84f
         )
     }
 
