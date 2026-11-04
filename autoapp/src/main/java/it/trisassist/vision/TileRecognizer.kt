@@ -33,6 +33,7 @@ class TileRecognizer {
     private data class Triplet(
         val indices: IntArray,
         val trayCount: Int,
+        val symmetryScore: Float,
         val unlockScore: Float,
         val visualScore: Float
     )
@@ -199,6 +200,7 @@ class TileRecognizer {
                     val candidate = Triplet(
                         indices = indices,
                         trayCount = 3 - boardCount,
+                        symmetryScore = symmetryScore(indices, features, screenWidth),
                         unlockScore = unlockScore(indices, features, screenWidth),
                         visualScore = visualScore
                     )
@@ -217,14 +219,52 @@ class TileRecognizer {
             return candidate.trayCount > current.trayCount
         }
 
-        // With the same tray benefit, prefer exposed tiles in denser/central areas:
-        // removing them is more likely to reveal useful tiles underneath.
+        // Keep the two halves at a similar depth. The symbols do not have to
+        // mirror each other: the useful relation is between the structures
+        // revealed on opposite sides of the vertical axis.
+        if (abs(candidate.symmetryScore - current.symmetryScore) > 0.06f) {
+            return candidate.symmetryScore > current.symmetryScore
+        }
+
+        // With the same tray benefit and symmetry, prefer exposed tiles in
+        // denser/central areas: removing them is more likely to reveal useful
+        // tiles underneath.
         if (abs(candidate.unlockScore - current.unlockScore) > 0.08f) {
             return candidate.unlockScore > current.unlockScore
         }
 
         // Finally choose the visually safest match.
         return candidate.visualScore < current.visualScore
+    }
+
+    private fun symmetryScore(indices: IntArray, features: List<Feature>, screenWidth: Float): Float {
+        val board = features.filter { it.region == 0 }
+        val selected = indices.map { features[it] }.filter { it.region == 0 }
+        if (selected.isEmpty()) return 0f
+
+        val left = selected.count { it.bounds.centerX() < screenWidth / 2f }
+        val right = selected.count { it.bounds.centerX() > screenWidth / 2f }
+        val spreadBalance = 1f - (abs(left - right).toFloat() / selected.size.toFloat())
+
+        var mirrorSupport = 0f
+        selected.forEach { tile ->
+            val mirroredX = screenWidth - tile.bounds.centerX()
+            val tolerance = tile.bounds.width() * 0.72f
+            val counterpart = board.minByOrNull { other ->
+                abs(other.bounds.centerX() - mirroredX) +
+                    abs(other.bounds.centerY() - tile.bounds.centerY())
+            }
+            if (counterpart != null) {
+                val dx = abs(counterpart.bounds.centerX() - mirroredX)
+                val dy = abs(counterpart.bounds.centerY() - tile.bounds.centerY())
+                if (dx <= tolerance && dy <= tolerance) {
+                    mirrorSupport += 1f - ((dx + dy) / (tolerance * 2f)).coerceIn(0f, 1f)
+                }
+            }
+        }
+
+        val mirrorAverage = mirrorSupport / selected.size.toFloat()
+        return spreadBalance * 0.58f + mirrorAverage * 0.42f
     }
 
     private fun unlockScore(indices: IntArray, features: List<Feature>, screenWidth: Float): Float {
