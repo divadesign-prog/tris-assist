@@ -88,35 +88,66 @@ class TileRecognizer {
 
     private fun symmetryOpeningHint(current: List<Feature>, screenWidth: Float): LayerHint? {
         if (current.size < 2) return null
-        val centerX = screenWidth / 2f
-        val paired = current.mapNotNull { tile ->
-            val mirrorX = screenWidth - tile.bounds.centerX()
-            val tolerance = tile.bounds.width() * 0.62f
-            val counterpart = current
-                .filter { other ->
-                    (tile.bounds.centerX() < centerX) != (other.bounds.centerX() < centerX)
-                }
-                .minByOrNull { other ->
-                    abs(other.bounds.centerX() - mirrorX) +
-                        abs(other.bounds.centerY() - tile.bounds.centerY())
-                } ?: return@mapNotNull null
-            val dx = abs(counterpart.bounds.centerX() - mirrorX)
-            val dy = abs(counterpart.bounds.centerY() - tile.bounds.centerY())
-            if (dx > tolerance || dy > tolerance) return@mapNotNull null
+        val candidates = mutableListOf<Pair<Feature, Float>>()
+        spatialClusters(current).forEach { cluster ->
+            if (cluster.size < 2) return@forEach
+            val axis = (cluster.minOf { it.bounds.centerX() } +
+                cluster.maxOf { it.bounds.centerX() }) / 2f
+            cluster.forEach { tile ->
+                val mirrorX = 2f * axis - tile.bounds.centerX()
+                val tolerance = tile.bounds.width() * 0.58f
+                val counterpart = cluster
+                    .filter { other ->
+                        other !== tile &&
+                            (tile.bounds.centerX() < axis) != (other.bounds.centerX() < axis)
+                    }
+                    .minByOrNull { other ->
+                        abs(other.bounds.centerX() - mirrorX) +
+                            abs(other.bounds.centerY() - tile.bounds.centerY())
+                    } ?: return@forEach
+                val dx = abs(counterpart.bounds.centerX() - mirrorX)
+                val dy = abs(counterpart.bounds.centerY() - tile.bounds.centerY())
+                if (dx > tolerance || dy > tolerance) return@forEach
 
-            val near = current.count { other ->
-                other !== tile &&
-                    abs(other.bounds.centerX() - tile.bounds.centerX()) < tile.bounds.width() * 1.55f &&
-                    abs(other.bounds.centerY() - tile.bounds.centerY()) < tile.bounds.height() * 1.55f
+                val near = cluster.count { other ->
+                    other !== tile &&
+                        abs(other.bounds.centerX() - tile.bounds.centerX()) < tile.bounds.width() * 1.50f &&
+                        abs(other.bounds.centerY() - tile.bounds.centerY()) < tile.bounds.height() * 1.50f
+                }
+                val pairQuality = 1f - ((dx + dy) / (tolerance * 2f)).coerceIn(0f, 1f)
+                candidates += tile to (near.toFloat() + pairQuality * 0.8f)
             }
-            val edgePenalty = abs(tile.bounds.centerX() - centerX) / centerX
-            Triple(tile, near.toFloat() - edgePenalty * 0.35f, counterpart)
         }
-        val best = paired.maxByOrNull { it.second } ?: return null
-        return LayerHint(
-            blockerBounds = RectF(best.first.bounds),
-            confidence = 0.84f
-        )
+        val best = candidates.maxByOrNull { it.second } ?: return null
+        return LayerHint(RectF(best.first.bounds), 0.84f)
+    }
+
+    private fun spatialClusters(features: List<Feature>): List<List<Feature>> {
+        val remaining = features.toMutableSet()
+        val result = mutableListOf<List<Feature>>()
+        while (remaining.isNotEmpty()) {
+            val seed = remaining.first()
+            remaining.remove(seed)
+            val cluster = mutableListOf(seed)
+            val queue = ArrayDeque<Feature>()
+            queue.add(seed)
+            while (queue.isNotEmpty()) {
+                val current = queue.removeFirst()
+                val width = current.bounds.width().coerceAtLeast(1f)
+                val neighbours = remaining.filter { other ->
+                    val limit = max(width, other.bounds.width()) * 2.35f
+                    abs(other.bounds.centerX() - current.bounds.centerX()) <= limit &&
+                        abs(other.bounds.centerY() - current.bounds.centerY()) <= limit
+                }
+                neighbours.forEach {
+                    remaining.remove(it)
+                    cluster += it
+                    queue.add(it)
+                }
+            }
+            result += cluster
+        }
+        return result
     }
 
     private fun updateLayerMemory(current: List<Feature>): LayerHint? {
@@ -227,9 +258,11 @@ class TileRecognizer {
                     val distanceBC = distances[b][c]
                     val visualScore = maxOf(distanceAB, distanceAC, distanceBC)
                     val averageScore = (distanceAB + distanceAC + distanceBC) / 3f
-                    // Accept small changes in crop/lighting (especially milk, meat,
-                    // gloves and diamonds), but still require all three matches.
-                    if (visualScore > 0.56f || averageScore > 0.48f) continue
+                    // When the tray is crowded, false matches are more dangerous
+                    // than waiting. Require a much tighter visual agreement.
+                    val maxVisual = if (traySize >= 4) 0.45f else 0.54f
+                    val maxAverage = if (traySize >= 4) 0.39f else 0.46f
+                    if (visualScore > maxVisual || averageScore > maxAverage) continue
 
                     val candidate = Triplet(
                         indices = indices,
@@ -276,29 +309,38 @@ class TileRecognizer {
         val selected = indices.map { features[it] }.filter { it.region == 0 }
         if (selected.isEmpty()) return 0f
 
-        val left = selected.count { it.bounds.centerX() < screenWidth / 2f }
-        val right = selected.count { it.bounds.centerX() > screenWidth / 2f }
-        val spreadBalance = 1f - (abs(left - right).toFloat() / selected.size.toFloat())
+        val clusterMap = mutableMapOf<Feature, Pair<List<Feature>, Float>>()
+        spatialClusters(board).forEach { cluster ->
+            val axis = (cluster.minOf { it.bounds.centerX() } +
+                cluster.maxOf { it.bounds.centerX() }) / 2f
+            cluster.forEach { clusterMap[it] = cluster to axis }
+        }
 
-        var mirrorSupport = 0f
+        var total = 0f
         selected.forEach { tile ->
-            val mirroredX = screenWidth - tile.bounds.centerX()
-            val tolerance = tile.bounds.width() * 0.72f
-            val counterpart = board.minByOrNull { other ->
-                abs(other.bounds.centerX() - mirroredX) +
-                    abs(other.bounds.centerY() - tile.bounds.centerY())
-            }
+            val pair = clusterMap[tile] ?: return@forEach
+            val cluster = pair.first
+            val axis = pair.second
+            val mirrorX = 2f * axis - tile.bounds.centerX()
+            val tolerance = tile.bounds.width() * 0.62f
+            val counterpart = cluster
+                .filter { other ->
+                    other !== tile &&
+                        (tile.bounds.centerX() < axis) != (other.bounds.centerX() < axis)
+                }
+                .minByOrNull { other ->
+                    abs(other.bounds.centerX() - mirrorX) +
+                        abs(other.bounds.centerY() - tile.bounds.centerY())
+                }
             if (counterpart != null) {
-                val dx = abs(counterpart.bounds.centerX() - mirroredX)
+                val dx = abs(counterpart.bounds.centerX() - mirrorX)
                 val dy = abs(counterpart.bounds.centerY() - tile.bounds.centerY())
                 if (dx <= tolerance && dy <= tolerance) {
-                    mirrorSupport += 1f - ((dx + dy) / (tolerance * 2f)).coerceIn(0f, 1f)
+                    total += 1f - ((dx + dy) / (tolerance * 2f)).coerceIn(0f, 1f)
                 }
             }
         }
-
-        val mirrorAverage = mirrorSupport / selected.size.toFloat()
-        return spreadBalance * 0.58f + mirrorAverage * 0.42f
+        return total / selected.size.toFloat()
     }
 
     private fun unlockScore(indices: IntArray, features: List<Feature>, screenWidth: Float): Float {
