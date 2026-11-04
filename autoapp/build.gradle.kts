@@ -13,7 +13,7 @@ android {
     }
     defaultConfig {
         applicationId = "it.autotris"
-        minSdk = 26; targetSdk = 35; versionCode = 3; versionName = "0.3.0-simmetria-dinamica"
+        minSdk = 26; targetSdk = 35; versionCode = 4; versionName = "0.4.0-simmetria-locale"
     }
     buildTypes { getByName("debug") { signingConfig = signingConfigs.getByName("stableDebug") } }
     buildFeatures { viewBinding = false }
