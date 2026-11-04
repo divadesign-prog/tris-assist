@@ -13,7 +13,7 @@ android {
     }
     defaultConfig {
         applicationId = "it.autotris"
-        minSdk = 26; targetSdk = 35; versionCode = 1; versionName = "0.1.0-sperimentale"
+        minSdk = 26; targetSdk = 35; versionCode = 2; versionName = "0.2.0-simmetria"
     }
     buildTypes { getByName("debug") { signingConfig = signingConfigs.getByName("stableDebug") } }
     buildFeatures { viewBinding = false }
