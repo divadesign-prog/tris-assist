@@ -20,8 +20,8 @@ android {
         applicationId = "it.trisassist"
         minSdk = 26
         targetSdk = 35
-        versionCode = 48
-        versionName = "0.48.0-stabile"
+        versionCode = 49
+        versionName = "0.49.0-timer"
     }
 
     buildTypes {
