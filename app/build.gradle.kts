@@ -20,8 +20,8 @@ android {
         applicationId = "it.trisassist.test"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-test-gomitolo"
+        versionCode = 2
+        versionName = "0.2.0-test-veloce"
     }
 
     buildTypes {
