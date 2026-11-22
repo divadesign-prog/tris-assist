@@ -256,8 +256,14 @@ class TileRecognizer {
         val side = 20
         val channels = 3
         var best = Float.MAX_VALUE
-        for (shiftY in -1..1) {
-            for (shiftX in -1..1) {
+        val blueFeatureOffset = side * side * channels
+        val bluePair = a.size >= blueFeatureOffset + 5 &&
+            b.size >= blueFeatureOffset + 5 &&
+            a[blueFeatureOffset] >= 0.08f &&
+            b[blueFeatureOffset] >= 0.08f
+        val shiftRange = if (bluePair) -2..2 else -1..1
+        for (shiftY in shiftRange) {
+            for (shiftX in shiftRange) {
                 var sum = 0f
                 var count = 0
                 for (y in 0 until side) {
@@ -281,12 +287,21 @@ class TileRecognizer {
                 }
             }
         }
+        if (a.size >= blueFeatureOffset + 5 && b.size >= blueFeatureOffset + 5) {
+            var featureDelta = 0f
+            for (i in 0 until 5) {
+                val delta = a[blueFeatureOffset + i] - b[blueFeatureOffset + i]
+                featureDelta += delta * delta
+            }
+            best += sqrt(featureDelta / 5f) * 0.22f
+        }
         return best
     }
 
     private fun signature(source: Bitmap, bounds: RectF): FloatArray {
-        val insetX = bounds.width() * 0.12f
-        val insetY = bounds.height() * 0.12f
+        // A smaller inset keeps the yarn tail and curved outline visible.
+        val insetX = bounds.width() * 0.08f
+        val insetY = bounds.height() * 0.08f
         val left = (bounds.left + insetX).toInt().coerceIn(0, source.width - 1)
         val top = (bounds.top + insetY).toInt().coerceIn(0, source.height - 1)
         val right = (bounds.right - insetX).toInt().coerceIn(left + 1, source.width)
@@ -298,10 +313,27 @@ class TileRecognizer {
         scaled.getPixels(pixels, 0, 20, 0, 0, 20, 20)
         scaled.recycle()
 
-        val values = FloatArray(400 * 3)
+        val values = FloatArray(400 * 3 + 5)
         val means = FloatArray(3)
+        var blueCount = 0
+        var blueSumX = 0f
+        var blueSumY = 0f
+        var blueSumX2 = 0f
+        var blueSumY2 = 0f
         pixels.forEachIndexed { index, color ->
             val channels = intArrayOf((color shr 16) and 255, (color shr 8) and 255, color and 255)
+            val px = (index % 20) / 19f
+            val py = (index / 20) / 19f
+            if (channels[2] > channels[0] * 1.14f &&
+                channels[2] > channels[1] * 1.04f &&
+                channels[2] - minOf(channels[0], channels[1]) >= 28
+            ) {
+                blueCount++
+                blueSumX += px
+                blueSumY += py
+                blueSumX2 += px * px
+                blueSumY2 += py * py
+            }
             for (channel in 0..2) {
                 values[index * 3 + channel] = channels[channel].toFloat()
                 means[channel] += channels[channel]
@@ -316,6 +348,16 @@ class TileRecognizer {
         for (channel in 0..2) deviations[channel] = max(12f, sqrt(deviations[channel] / 400f))
         for (i in 0 until 400) for (channel in 0..2) {
             values[i * 3 + channel] = (values[i * 3 + channel] - means[channel]) / deviations[channel]
+        }
+        val blueOffset = 400 * 3
+        if (blueCount > 0) {
+            val meanX = blueSumX / blueCount
+            val meanY = blueSumY / blueCount
+            values[blueOffset] = blueCount / 400f
+            values[blueOffset + 1] = meanX
+            values[blueOffset + 2] = meanY
+            values[blueOffset + 3] = sqrt((blueSumX2 / blueCount - meanX * meanX).coerceAtLeast(0f))
+            values[blueOffset + 4] = sqrt((blueSumY2 / blueCount - meanY * meanY).coerceAtLeast(0f))
         }
         return values
     }
